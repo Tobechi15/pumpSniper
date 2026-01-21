@@ -135,8 +135,11 @@ async function main() {
      * Start listener
      */
     detector.start();
+    // Start API server
+    const PORT = config.PORT
+    app.listen(PORT, () => logger.info(`✅ API server running on port ${PORT}`));
 
-  } catch {
+  } catch(error) {
     logger.error(`Error initializing the bot: ${error.message}`);
   }
 }
