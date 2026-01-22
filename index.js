@@ -58,7 +58,7 @@ async function main() {
       switch (analysis.type) {
         case 'community':
           return (
-            analysis.memberCount > 990
+            analysis.memberCount > 400
           );
 
         case 'post':
@@ -72,7 +72,7 @@ async function main() {
         default:
           return (
             analysis.isVerified === true &&
-            analysis.followerCount > 800
+            analysis.followerCount > 400
           );
       }
     };
