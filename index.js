@@ -6,156 +6,138 @@ const path = require("path");
 const { config } = require('./src/Utils/config.js');
 const { GetMetaData } = require('./src/Blockchain/metaData.js');
 const { logger } = require('./src/Utils/logger.js');
-const { scrapeX } = require('./src/Controller/offChainAna.js');
-const { createBrowser } = require("./src/pupbrowser/browser.js");
-const { warmUpXSession } = require("./src/pupbrowser/warmup.js");
-const { applyFingerprint } = require("./src/pupbrowser/fingerprint.js");
 
+const XScraper = require('./src/Controller/offChainAna.js');
 const GraduationDetector = require('./src/Controller/listener.js');
-const sendTelegramMessage = require('./src/Database/alert.js')
+const sendTelegramMessage = require('./src/Database/alert.js');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+/* ------------------ SERVICES ------------------ */
+
+const scraper = new XScraper();
 
 const detector = new GraduationDetector(
   config.PUBLIC_RPC_URL,
   config.PUBLIC_WS_URL
 );
 
+/* ------------------ HEALTH ENDPOINTS ------------------ */
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const LOG_FILE = path.join(__dirname, "./logs/app.log");
-
-app.get("/api/health", async (req, res) => {
-  try {
-    res.json({ status: "OK", message: "Raydium Token Sniping Bot is running." });
-  } catch (err) {
-    logger.error(`Health check failed: ${err.message}`);
-    res.status(500).json({ status: "ERROR", message: "Internal Server Error" });
-  }
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "OK",
+    message: "Raydium Token Sniping Bot is running."
+  });
 });
 
-app.get("/api/balance", async (req, res) => {
-  try {
-    const balance = await getWalletBalance();
-    res.json({ status: "OK", balance });
-  } catch (err) {
-    logger.error(`Balance check failed: ${err.message}`);
-    res.status(500).json({ status: "ERROR", message: "Internal Server Error" });
+/* ------------------ OFF‑CHAIN FILTER ------------------ */
+
+function passesOffChainCriteria(analysis) {
+  if (!analysis) return false;
+
+  logger.info(JSON.stringify(analysis, null, 2));
+
+  switch (analysis.type) {
+    case 'community':
+      return analysis.memberCount > 400;
+
+    case 'post':
+      return (
+        analysis.isVerified === true &&
+        analysis.engagement.comments > 400 &&
+        analysis.engagement.likes > 3000
+      );
+
+    case 'profile':
+    default:
+      return (
+        analysis.isVerified === true &&
+        analysis.followerCount > 400
+      );
   }
-});
+}
 
-
+/* ------------------ MAIN BOOTSTRAP ------------------ */
 
 async function main() {
-  browser = await createBrowser();
-  page = await browser.newPage();
-
-  await applyFingerprint(page);
-
-  // 🔥 RUN ONCE
-  await warmUpXSession(page);
-
-  await browser.close();
-
   try {
-    /**
-     * Centralized decision engine
-     */
-    const passesOffChainCriteria = (analysisResult) => {
-      const analysis = analysisResult;
+    logger.info("Initializing off‑chain scraper...");
+    await scraper.init(); // 🔥 single browser instance
 
-      if (!analysis) return false;
+    logger.info("Starting graduation detector...");
+    detector.start();
 
-      logger.info(JSON.stringify(analysis, null, 2));
-
-
-      switch (analysis.type) {
-        case 'community':
-          return (
-            analysis.memberCount > 400
-          );
-
-        case 'post':
-          return (
-            analysis.isVerified === true &&
-            analysis.engagement.comments > 400 &&
-            analysis.engagement.likes > 3000
-          );
-
-        case 'profile':
-        default:
-          return (
-            analysis.isVerified === true &&
-            analysis.followerCount > 400
-          );
-      }
-    };
-
-    /**
-     * Graduation Event Listener
-     */
     detector.on('graduated', async (tokenMint) => {
-      logger.info(`TRIGGER: Token graduated → ${tokenMint}`);
+      logger.info(`TRIGGER → Token graduated: ${tokenMint}`);
 
       try {
         const metadata = await GetMetaData(tokenMint);
 
         if (!metadata?.twitterHandle) {
-          logger.warn(`SKIP: No Twitter handle for ${tokenMint}`);
+          logger.warn(`SKIP → No Twitter handle for ${tokenMint}`);
           return;
         }
 
-        logger.info(`Analyzing X source: ${metadata.twitterHandle}`);
+        logger.info(`Analyzing X source → ${metadata.twitterHandle}`);
 
-        const analysisResult = await scrapeX(metadata.twitterHandle);
+        const analysis = await scraper.scrape(metadata.twitterHandle);
 
-        if (!analysisResult) {
-          logger.warn(`Off-chain analysis failed for ${tokenMint}`);
+        if (!analysis) {
+          logger.warn(`FAILED → Off‑chain analysis error`);
           return;
         }
 
-        if (!passesOffChainCriteria(analysisResult)) {
-          logger.info(`REJECTED: Off-chain criteria not met`, {
+        if (!passesOffChainCriteria(analysis)) {
+          logger.info(`REJECTED → Criteria not met`, {
             token: tokenMint,
-            type: analysisResult.type
+            type: analysis.type
           });
           return;
         }
 
-        logger.info(`APPROVED: Off-chain analysis passed`, {
+        logger.info(`APPROVED → Off‑chain validation passed`, {
           token: tokenMint,
           name: metadata.name,
-          type: analysisResult.type
+          type: analysis.type
         });
 
-
-
-        // await triggerNewTrade(tokenMint, 0.01);
-        sendTelegramMessage(`APPROVED: Off-chain analysis passed`, {
-          token: tokenMint,
-          name: metadata.name,
-          type: analysisResult.type
-        });
+        sendTelegramMessage(
+          `APPROVED: Off‑chain analysis passed`,
+          {
+            token: tokenMint,
+            name: metadata.name,
+            type: analysis.type
+          }
+        );
 
       } catch (err) {
-        logger.error(`ERROR processing ${tokenMint}: ${err.message}`);
+        logger.error(`PROCESSING ERROR (${tokenMint}): ${err.message}`);
       }
-      logger.info('---------------------------------------------------------------')
+
+      logger.info("--------------------------------------------------");
     });
 
-    /**
-     * Start listener
-     */
-    detector.start();
-    // Start API server
-    const PORT = config.PORT
-    app.listen(PORT, () => logger.info(`✅ API server running on port ${PORT}`));
+    const PORT = config.PORT;
+    app.listen(PORT, () =>
+      logger.info(`✅ API server running on port ${PORT}`)
+    );
 
-  } catch (error) {
-    logger.error(`Error initializing the bot: ${error.message}`);
+  } catch (err) {
+    logger.error(`BOOTSTRAP FAILURE: ${err.message}`);
+    process.exit(1);
   }
 }
 
-// --- Start Application ---
+/* ------------------ GRACEFUL SHUTDOWN ------------------ */
+
+process.on("SIGINT", async () => {
+  logger.warn("Shutting down gracefully...");
+  await scraper.close();
+  process.exit(0);
+});
+
+/* ------------------ START ------------------ */
 main();
