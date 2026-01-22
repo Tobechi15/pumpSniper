@@ -126,6 +126,7 @@ async function main() {
       } catch (err) {
         logger.error(`ERROR processing ${tokenMint}: ${err.message}`);
       }
+      logger.info('---------------------------------------------------------------')
     });
 
     /**

@@ -53,7 +53,7 @@ const extractCid = (uri) => {
 };
 
 const buildGatewayUrls = (cid) =>
-    IPFS_GATEWAYS.map((g) => `${g}${cid}?format=raw`);
+    IPFS_GATEWAYS.map((g) => `${g}${cid}`);
 
 const fetchIpfsJsonWithFallback = async (uri) => {
     const cid = extractCid(uri);

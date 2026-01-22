@@ -8,13 +8,25 @@ class GraduationDetector extends EventEmitter {
         super();
         this.connection = new Connection(rpcUrl, { wsEndpoint: wssUrl });
         this.PUMP_MIGRATION_PROGRAM = new PublicKey('39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg');
-        this.seenSignatures = new Set();
+
+        // Map to track seen signatures with timestamp
+        this.seenSignatures = new Map();
+        this.ttl = 1000 * 60 * 5; // 5 minutes
     }
 
     markSeen(signature) {
+        const now = Date.now();
+
+        // Clean up expired entries
+        for (const [sig, time] of this.seenSignatures.entries()) {
+            if (now - time > this.ttl) this.seenSignatures.delete(sig);
+        }
+
+        // If already seen, skip
         if (this.seenSignatures.has(signature)) return false;
-        this.seenSignatures.add(signature);
-        setTimeout(() => this.seenSignatures.delete(signature), 1000 * 60 * 5);
+
+        // Mark as seen
+        this.seenSignatures.set(signature, now);
         return true;
     }
 
@@ -25,11 +37,15 @@ class GraduationDetector extends EventEmitter {
             this.PUMP_MIGRATION_PROGRAM,
             async (logs) => {
                 try {
+                    // Only proceed if signature has not been seen recently
                     if (!this.markSeen(logs.signature)) return;
+
+                    // Skip logs without "Migrate"
                     if (!logs.logs.some(log => log.includes("Migrate"))) return;
 
                     const signature = logs.signature;
 
+                    // Fetch transaction details
                     const tx = await this.connection.getParsedTransaction(signature, {
                         maxSupportedTransactionVersion: 0,
                         commitment: 'confirmed'
@@ -43,14 +59,15 @@ class GraduationDetector extends EventEmitter {
 
                     if (!tokenMint) return;
 
+                    // Log once per signature
                     logger.info(`Signature: ${signature}`);
+                    logger.info(`TRIGGER: Token graduated → ${tokenMint}`);
 
                     // Emit event to external listener
                     this.emit('graduated', tokenMint);
 
                 } catch (err) {
-                    // logger.warn(`Error processing graduation log: ${err.message}`);
-                    // Often occurs if transaction isn't fully indexed yet
+                    logger.warn(`Error processing graduation log: ${err.message}`);
                 }
             },
             'confirmed'
