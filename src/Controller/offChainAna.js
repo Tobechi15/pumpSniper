@@ -67,65 +67,106 @@ RETURN STRICT JSON ONLY:
   }
 };
 
+/* ------------------ helpers ------------------ */
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const normalizeCount = (value = "") => {
   const v = value.replace(/,/g, "").toUpperCase();
-  if (v.endsWith("K")) return parseFloat(v) * 1_000;
-  if (v.endsWith("M")) return parseFloat(v) * 1_000_000;
+  if (v.endsWith("K")) return Math.round(parseFloat(v) * 1_000);
+  if (v.endsWith("M")) return Math.round(parseFloat(v) * 1_000_000);
   return parseInt(v) || 0;
 };
 
-async function gotoWithRetry(page, url, {
-  retries = 3,
-  delayMs = 3000
-} = {}) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
+/* ------------------ human-like navigation ------------------ */
 
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 0 });
+async function gotoHumanLike(page, url) {
+  await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout: 45000
+  });
 
-      // Wait for a meaningful selector (but never hard-fail)
-      await page.waitForSelector('[data-testid="primaryColumn"]', {
-        timeout: 8000
-      }).catch(() => null);
+  // Wait for React hydration
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[data-testid="UserDescription"]') ||
+      document.querySelector('[data-testid="tweetText"]') ||
+      document.querySelector('[data-testid="primaryColumn"]'),
+    { timeout: 20000 }
+  );
 
-      // If we reach here, navigation is considered successful
-      return true;
+  // Human pause
+  await sleep(1200 + Math.random() * 1500);
 
-    } catch (err) {
-      if (attempt === retries) {
-        throw err;
-      }
+  // Human scroll
+  await page.evaluate(() => {
+    window.scrollBy(0, 300 + Math.random() * 400);
+  });
 
-      await new Promise(res => setTimeout(res, delayMs));
-    }
-  }
+  await sleep(1000);
 }
 
+/* ------------------ fingerprint hardening ------------------ */
 
-const offChainAnalyze = async (twitterLink) => {
+async function applyFingerprint(page) {
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+      "AppleWebKit/537.36 (KHTML, like Gecko) " +
+      "Chrome/121.0.0.0 Safari/537.36"
+  );
+
+  await page.setExtraHTTPHeaders({
+    "accept-language": "en-US,en;q=0.9"
+  });
+
+  await page.setViewport({ width: 1280, height: 1600 });
+
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["en-US", "en"]
+    });
+    Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+    Object.defineProperty(navigator, "hardwareConcurrency", {
+      get: () => 8
+    });
+
+    Object.defineProperty(navigator, "plugins", {
+      get: () => [1, 2, 3, 4, 5]
+    });
+
+    window.chrome = { runtime: {} };
+  });
+}
+
+/* ------------------ scraper ------------------ */
+
+async function scrapeX(twitterLink) {
+  // Load browser with persistent x-session
   const browser = await puppeteer.launch({
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    userDataDir: "./x-session", // reuse the warm-up session
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+      "--window-size=1280,1600"
+    ]
   });
 
   const page = await browser.newPage();
 
   try {
-    await page.setViewport({ width: 1280, height: 1600 });
+    await applyFingerprint(page);
 
-    await gotoWithRetry(page, twitterLink, {
-      retries: 3,
-      delayMs: 3000
-    });
-
+    await gotoHumanLike(page, twitterLink);
 
     const contextType =
       twitterLink.includes("/communities/")
         ? "community"
         : twitterLink.includes("/status/")
-          ? "post"
-          : "profile";
+        ? "post"
+        : "profile";
 
     const scrapedData = await page.evaluate((type) => {
       const text = (sel) =>
@@ -133,11 +174,59 @@ const offChainAnalyze = async (twitterLink) => {
 
       const result = { type };
 
+      if (type === "profile") {
+        result.name = text('[data-testid="UserName"]');
+        result.bio = text('[data-testid="UserDescription"]');
+        result.isVerified = !!document.querySelector(
+          '[data-testid="icon-verified"]'
+        );
+
+        const stat = (label) =>
+          Array.from(document.querySelectorAll("a"))
+            .find((a) => a.innerText.includes(label))
+            ?.innerText.replace(label, "")
+            .trim() || "0";
+
+        result.followingCount = stat("Following");
+        result.followerCount = stat("Followers");
+
+        result.joinedDate =
+          Array.from(document.querySelectorAll("span"))
+            .find((s) => s.innerText.includes("Joined"))
+            ?.innerText || "";
+      }
+
+      if (type === "post") {
+        result.username = text('[data-testid="UserName"]');
+        result.content = text('[data-testid="tweetText"]');
+        result.isVerified = !!document.querySelector(
+          '[data-testid="icon-verified"]'
+        );
+
+        const engagement = {};
+        document
+          .querySelectorAll(
+            '[data-testid="reply"],[data-testid="retweet"],[data-testid="like"],[data-testid="bookmark"]'
+          )
+          .forEach((el) => {
+            const label = el.getAttribute("aria-label") || "";
+            if (label.includes("Reply")) engagement.comments = label;
+            if (label.includes("Repost")) engagement.reposts = label;
+            if (label.includes("Like")) engagement.likes = label;
+            if (label.includes("Bookmark")) engagement.bookmarks = label;
+          });
+
+        result.engagement = engagement;
+      }
+
       if (type === "community") {
         result.name = text('h2[role="heading"]');
         result.description =
-          document.querySelector('[style*="-webkit-line-clamp"]')?.innerText || "";
-        result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+          document.querySelector('[style*="-webkit-line-clamp"]')?.innerText ||
+          "";
+        result.isVerified = !!document.querySelector(
+          '[data-testid="icon-verified"]'
+        );
 
         const members = Array.from(document.querySelectorAll("span"))
           .find((s) => s.innerText === "Members")
@@ -146,70 +235,30 @@ const offChainAnalyze = async (twitterLink) => {
         result.memberCount = members?.replace("Members", "").trim() || "0";
       }
 
-      if (type === "profile") {
-        result.name = text('[data-testid="UserName"]');
-        result.bio = text('[data-testid="UserDescription"]');
-        result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
-
-        const stat = (label) =>
-          Array.from(document.querySelectorAll("a"))
-            .find((a) => a.innerText.includes(label))
-            ?.innerText.replace(label, "")
-            .trim() || "0";
-
-        result.followerCount = stat("Followers");
-        result.followingCount = stat("Following");
-        result.joinedDate =
-          Array.from(document.querySelectorAll("span"))
-            .find((s) => s.innerText.includes("Joined"))
-            ?.innerText || "";
-      }
-
-      if (type === 'post') {
-        // In single post view, the main tweet is often the first 'article' or tweet test-id
-        result.username = text('[data-testid="User-Name"]');
-        result.content = text('[data-testid="tweetText"]');
-        result.engagement = text('[role="group"][aria-label*="replies"]');
-        result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
-      }
-
-      const posts = [];
-      document
-        .querySelectorAll('[data-testid="tweet"]')
-        .forEach((t) => {
-          const content = t.querySelector('[data-testid="tweetText"]')?.innerText;
-          const stats = t.querySelector('[role="group"]')?.ariaLabel;
-          if (content) posts.push({ content, stats });
-        });
-
-      result.recentActivity = posts.slice(0, 3);
       return result;
     }, contextType);
 
-
-    const engagementStr = scrapedData.engagement || "";
-    const parts = engagementStr.split('\n');
-
-    scrapedData.engagement = {
-      comments: normalizeCount(parts[0] || "0"),
-      reposts: normalizeCount(parts[1] || "0"),
-      likes: normalizeCount(parts[2] || "0"),
-      bookmarks: normalizeCount(parts[3] || "0")
-    };
+    // normalize numbers
+    if (scrapedData.engagement) {
+      scrapedData.engagement = {
+        comments: normalizeCount(scrapedData.engagement.comments || "0"),
+        reposts: normalizeCount(scrapedData.engagement.reposts || "0"),
+        likes: normalizeCount(scrapedData.engagement.likes || "0"),
+        bookmarks: normalizeCount(scrapedData.engagement.bookmarks || "0")
+      };
+    }
 
     scrapedData.followingCount = normalizeCount(scrapedData.followingCount);
     scrapedData.followerCount = normalizeCount(scrapedData.followerCount);
     scrapedData.memberCount = normalizeCount(scrapedData.memberCount);
 
-    // const analysis = await analyzeProjectData(scrapedData);
-
     return scrapedData;
   } catch (err) {
-    logger.error("SCRAPER_ERROR:", err);
+    console.error("SCRAPER_ERROR:", err.message);
     return null;
   } finally {
     await browser.close();
   }
-};
+}
 
-module.exports = { offChainAnalyze };
+module.exports = { scrapeX };

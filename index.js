@@ -6,7 +6,11 @@ const path = require("path");
 const { config } = require('./src/Utils/config.js');
 const { GetMetaData } = require('./src/Blockchain/metaData.js');
 const { logger } = require('./src/Utils/logger.js');
-const { offChainAnalyze } = require('./src/Controller/offChainAna.js');
+const { scrapeX } = require('./src/Controller/offChainAna.js');
+const { createBrowser } = require("./src/pupbrowser/browser.js");
+const { warmUpXSession } = require("./src/pupbrowser/warmup.js");
+const { applyFingerprint } = require("./src/pupbrowser/fingerprint.js");
+
 const GraduationDetector = require('./src/Controller/listener.js');
 const sendTelegramMessage = require('./src/Database/alert.js')
 
@@ -42,13 +46,24 @@ app.get("/api/balance", async (req, res) => {
 });
 
 
+
 async function main() {
+  browser = await createBrowser();
+  page = await browser.newPage();
+
+  await applyFingerprint(page);
+
+  // 🔥 RUN ONCE
+  await warmUpXSession(page);
+
+  await browser.close();
+
   try {
     /**
      * Centralized decision engine
      */
     const passesOffChainCriteria = (analysisResult) => {
-      const analysis  = analysisResult;
+      const analysis = analysisResult;
 
       if (!analysis) return false;
 
@@ -93,7 +108,7 @@ async function main() {
 
         logger.info(`Analyzing X source: ${metadata.twitterHandle}`);
 
-        const analysisResult = await offChainAnalyze(metadata.twitterHandle);
+        const analysisResult = await scrapeX(metadata.twitterHandle);
 
         if (!analysisResult) {
           logger.warn(`Off-chain analysis failed for ${tokenMint}`);
@@ -137,7 +152,7 @@ async function main() {
     const PORT = config.PORT
     app.listen(PORT, () => logger.info(`✅ API server running on port ${PORT}`));
 
-  } catch(error) {
+  } catch (error) {
     logger.error(`Error initializing the bot: ${error.message}`);
   }
 }

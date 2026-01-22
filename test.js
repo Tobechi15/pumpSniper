@@ -1,5 +1,8 @@
-const {GetMetaData} = require('./src/Blockchain/metaData');
-const {offChainAnalyze} = require('./src/Controller/offChainAna')
+const { GetMetaData } = require('./src/Blockchain/metaData');
+const { scrapeX } = require('./src/Controller/offChainAna')
+const { createBrowser } = require("./src/pupbrowser/browser.js");
+const { warmUpXSession } = require("./src/pupbrowser/warmup.js");
+const { applyFingerprint } = require("./src/pupbrowser/fingerprint.js");
 
 // async function test() {
 //     const mintAddress = "DVYmgsdSovc6isvaWw2R5mHkPnVdiUuu8R6VuFPbpump"; 
@@ -12,8 +15,19 @@ const {offChainAnalyze} = require('./src/Controller/offChainAna')
 // test();
 
 async function test() {
-    const link = "https://x.com/i/communities/2014189756792635450"
-    const data = await offChainAnalyze(link);
+
+    browser = await createBrowser();
+    page = await browser.newPage();
+
+    await applyFingerprint(page);
+
+    // 🔥 RUN ONCE
+    await warmUpXSession(page);
+
+    await browser.close();
+
+    const link = "https://x.com/itisawonder"
+    const data = await scrapeX(link);
     console.log('scrapped data:', data)
 }
 test()
@@ -57,7 +71,7 @@ test()
 //       walletKeyPair,      // The Signer
 //       mint,               // Token Mint
 //       solAmount,          // Amount in Lamports (1 SOL = 1,000,000,000)
-//       slippageBasisPoints, 
+//       slippageBasisPoints,
 //       {
 //         unitLimit: 250000,
 //         unitPrice: 250000, // Priority fee (microLamports)
