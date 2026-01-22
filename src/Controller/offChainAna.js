@@ -85,7 +85,10 @@ const offChainAnalyze = async (twitterLink) => {
 
   try {
     await page.setViewport({ width: 1280, height: 1600 });
-    await page.goto(twitterLink, { waitUntil: "networkidle2", timeout: 30000 });
+    await page.goto(twitterLink, {
+      waitUntil: "domcontentloaded",
+      timeout: 0
+    });
 
     await page.waitForSelector('[data-testid="primaryColumn"]', { timeout: 10000 });
 
@@ -156,17 +159,16 @@ const offChainAnalyze = async (twitterLink) => {
     }, contextType);
 
 
-    const engagementStr = scrapedData.engagement;
-    // Split by new line
+    const engagementStr = scrapedData.engagement || "";
     const parts = engagementStr.split('\n');
 
-    // Map to structured object
     scrapedData.engagement = {
-      comments: normalizeCount(parts[0]),
-      reposts: normalizeCount(parts[1]),
-      likes: normalizeCount(parts[2]),
-      bookmarks: normalizeCount(parts[3])
-    };;
+      comments: normalizeCount(parts[0] || "0"),
+      reposts: normalizeCount(parts[1] || "0"),
+      likes: normalizeCount(parts[2] || "0"),
+      bookmarks: normalizeCount(parts[3] || "0")
+    };
+
     scrapedData.followingCount = normalizeCount(scrapedData.followingCount);
     scrapedData.followerCount = normalizeCount(scrapedData.followerCount);
     scrapedData.memberCount = normalizeCount(scrapedData.memberCount);
