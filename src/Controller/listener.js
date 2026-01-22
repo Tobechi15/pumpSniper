@@ -109,7 +109,6 @@ class GraduationDetector extends EventEmitter {
                     if (!this.markSeen(dedupeKey)) return;
 
                     logger.info(`Signature: ${signature}`);
-                    logger.info(`TRIGGER: Token graduated → ${tokenMint}`);
 
                     this.emit('graduated', tokenMint);
 
