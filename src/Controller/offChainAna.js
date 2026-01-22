@@ -75,6 +75,34 @@ const normalizeCount = (value = "") => {
   return parseInt(v) || 0;
 };
 
+async function gotoWithRetry(page, url, {
+  retries = 3,
+  delayMs = 3000
+} = {}) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+
+      await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+
+      // Wait for a meaningful selector (but never hard-fail)
+      await page.waitForSelector('[data-testid="primaryColumn"]', {
+        timeout: 8000
+      }).catch(() => null);
+
+      // If we reach here, navigation is considered successful
+      return true;
+
+    } catch (err) {
+      if (attempt === retries) {
+        throw err;
+      }
+
+      await new Promise(res => setTimeout(res, delayMs));
+    }
+  }
+}
+
+
 const offChainAnalyze = async (twitterLink) => {
   const browser = await puppeteer.launch({
     headless: "new",
@@ -85,12 +113,12 @@ const offChainAnalyze = async (twitterLink) => {
 
   try {
     await page.setViewport({ width: 1280, height: 1600 });
-    await page.goto(twitterLink, {
-      waitUntil: "domcontentloaded",
-      timeout: 0
+
+    await gotoWithRetry(page, twitterLink, {
+      retries: 3,
+      delayMs: 3000
     });
 
-    await page.waitForSelector('[data-testid="primaryColumn"]', { timeout: 10000 });
 
     const contextType =
       twitterLink.includes("/communities/")

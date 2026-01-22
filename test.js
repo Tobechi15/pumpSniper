@@ -1,22 +1,22 @@
 const {GetMetaData} = require('./src/Blockchain/metaData');
 const {offChainAnalyze} = require('./src/Controller/offChainAna')
 
-async function test() {
-    const mintAddress = "DVYmgsdSovc6isvaWw2R5mHkPnVdiUuu8R6VuFPbpump"; 
-    const rpcEndpoint = "https://api.mainnet-beta.solana.com"; // Replace with your RPC endpoint
-
-    const metadata = await GetMetaData(mintAddress);
-    console.log("Token Metadata:", metadata);
-}
-
-test();
-
 // async function test() {
-//     const link = "https://x.com/WhiteHouse/status/2013811528680485252?s=20"
-//     const data = await offChainAnalyze(link);
-//     console.log('scrapped data:', data)
+//     const mintAddress = "DVYmgsdSovc6isvaWw2R5mHkPnVdiUuu8R6VuFPbpump"; 
+//     const rpcEndpoint = "https://api.mainnet-beta.solana.com"; // Replace with your RPC endpoint
+
+//     const metadata = await GetMetaData(mintAddress);
+//     console.log("Token Metadata:", metadata);
 // }
-// test()
+
+// test();
+
+async function test() {
+    const link = "https://x.com/i/communities/2014189756792635450"
+    const data = await offChainAnalyze(link);
+    console.log('scrapped data:', data)
+}
+test()
 
 // const { Connection, Keypair, PublicKey } = require("@solana/web3.js");
 // const { PumpFunSDK } = require("@pump-fun/pump-swap-sdk");
