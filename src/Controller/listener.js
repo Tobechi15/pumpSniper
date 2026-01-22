@@ -61,7 +61,6 @@ class GraduationDetector extends EventEmitter {
 
                     // Log once per signature
                     logger.info(`Signature: ${signature}`);
-                    logger.info(`TRIGGER: Token graduated → ${tokenMint}`);
 
                     // Emit event to external listener
                     this.emit('graduated', tokenMint);
