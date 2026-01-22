@@ -62,7 +62,7 @@ RETURN STRICT JSON ONLY:
 
     return JSON.parse(jsonMatch[0]);
   } catch (err) {
-    console.error("AI_PARSE_ERROR:", err.message, "\nRAW_RESPONSE:", err.raw || "");
+    logger.error("AI_PARSE_ERROR:", err.message, "\nRAW_RESPONSE:", err.raw || "");
     return { error: "AI_ANALYSIS_FAILED" };
   }
 };
@@ -205,7 +205,7 @@ const offChainAnalyze = async (twitterLink) => {
 
     return scrapedData;
   } catch (err) {
-    console.error("SCRAPER_ERROR:", err.message);
+    logger.error("SCRAPER_ERROR:", err.message);
     return null;
   } finally {
     await browser.close();
