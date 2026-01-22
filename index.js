@@ -48,34 +48,31 @@ async function main() {
      * Centralized decision engine
      */
     const passesOffChainCriteria = (analysisResult) => {
-      const { type, analysis } = analysisResult;
+      const analysis  = analysisResult;
 
       if (!analysis) return false;
 
       logger.info(JSON.stringify(analysis, null, 2));
 
 
-      switch (type) {
+      switch (analysis.type) {
         case 'community':
           return (
-            analysis.audienceSize > 990 &&
-            analysis.credibilityScore >= 6 &&
-            analysis.engagementQuality === 'organic'
+            analysis.memberCount > 990
           );
 
         case 'post':
           return (
-            analysis.credibilityScore >= 7 &&
-            analysis.engagementQuality === 'organic' &&
-            analysis.isVerified === true
+            analysis.isVerified === true &&
+            analysis.engagement.comments > 400 &&
+            analysis.engagement.likes > 3000
           );
 
         case 'profile':
         default:
           return (
-            analysis.engagementQuality === 'organic' &&
             analysis.isVerified === true &&
-            analysis.audienceSize > 800
+            analysis.followerCount > 800
           );
       }
     };

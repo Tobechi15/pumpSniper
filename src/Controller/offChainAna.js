@@ -136,9 +136,9 @@ const offChainAnalyze = async (twitterLink) => {
 
       if (type === 'post') {
         // In single post view, the main tweet is often the first 'article' or tweet test-id
-        result.username = getTxt('[data-testid="User-Name"]');
-        result.content = getTxt('[data-testid="tweetText"]');
-        result.engagement = getTxt('[role="group"][aria-label*="replies"]');
+        result.username = text('[data-testid="User-Name"]');
+        result.content = text('[data-testid="tweetText"]');
+        result.engagement = text('[role="group"][aria-label*="replies"]');
         result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
       }
 
@@ -155,15 +155,25 @@ const offChainAnalyze = async (twitterLink) => {
       return result;
     }, contextType);
 
+
+    const engagementStr = scrapedData.engagement;
+    // Split by new line
+    const parts = engagementStr.split('\n');
+
+    // Map to structured object
+    scrapedData.engagement = {
+      comments: normalizeCount(parts[0]),
+      reposts: normalizeCount(parts[1]),
+      likes: normalizeCount(parts[2]),
+      bookmarks: normalizeCount(parts[3])
+    };;
+    scrapedData.followingCount = normalizeCount(scrapedData.followingCount);
     scrapedData.followerCount = normalizeCount(scrapedData.followerCount);
     scrapedData.memberCount = normalizeCount(scrapedData.memberCount);
 
-    const analysis = await analyzeProjectData(scrapedData);
+    // const analysis = await analyzeProjectData(scrapedData);
 
-    return {
-      type: contextType,
-      analysis
-    };
+    return scrapedData;
   } catch (err) {
     console.error("SCRAPER_ERROR:", err.message);
     return null;
