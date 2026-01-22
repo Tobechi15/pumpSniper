@@ -82,7 +82,7 @@ async function gotoWithRetry(page, url, {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
 
-      await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 0 });
 
       // Wait for a meaningful selector (but never hard-fail)
       await page.waitForSelector('[data-testid="primaryColumn"]', {
@@ -205,7 +205,7 @@ const offChainAnalyze = async (twitterLink) => {
 
     return scrapedData;
   } catch (err) {
-    logger.error("SCRAPER_ERROR:", err.message);
+    logger.error("SCRAPER_ERROR:", err);
     return null;
   } finally {
     await browser.close();
