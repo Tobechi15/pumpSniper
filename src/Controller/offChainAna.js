@@ -32,12 +32,14 @@ async function gotoHumanLike(page, url) {
   await sleep(1000);
 }
 
-/* ------------------ memory-friendly scraper ------------------ */
+/* ------------------ memory-friendly scraper with queue ------------------ */
 class XScraper {
   constructor() {
     this.browser = null;
     this.page = null;
     this.userDataDir = "./x-session"; // reuse warmup session
+    this.queue = [];
+    this.processing = false;
   }
 
   async init() {
@@ -54,90 +56,112 @@ class XScraper {
       });
       this.page = await this.browser.newPage();
       await applyFingerprint(this.page);
-      await warmUpXSession(this.page)
+      await warmUpXSession(this.page);
     }
   }
 
-  async scrape(twitterLink) {
-    if (!this.page) throw new Error("Scraper not initialized. Call init() first.");
+  async enqueueScrape(twitterLink) {
+    return new Promise((resolve) => {
+      this.queue.push({ twitterLink, resolve });
+      this._processQueue();
+    });
+  }
+
+  async _processQueue() {
+    if (this.processing) return;
+    if (this.queue.length === 0) return;
+
+    this.processing = true;
+    const { twitterLink, resolve } = this.queue.shift();
 
     try {
-      await gotoHumanLike(this.page, twitterLink);
-
-      const contextType = twitterLink.includes("/communities/") ? "community" :
-        twitterLink.includes("/status/") ? "post" : "profile";
-
-      const data = await this.page.evaluate((type) => {
-        const text = (sel) => document.querySelector(sel)?.innerText.trim() || "";
-        const result = { type };
-
-        if (type === "profile") {
-          result.name = text('[data-testid="UserName"]');
-          result.bio = text('[data-testid="UserDescription"]');
-          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
-
-          const stat = (label) =>
-            Array.from(document.querySelectorAll("a"))
-              .find(a => a.innerText.includes(label))
-              ?.innerText.replace(label, "").trim() || "0";
-
-          result.followingCount = stat("Following");
-          result.followerCount = stat("Followers");
-
-          result.joinedDate =
-            Array.from(document.querySelectorAll("span"))
-              .find(s => s.innerText.includes("Joined"))
-              ?.innerText || "";
-        }
-
-        if (type === "post") {
-          result.username = text('[data-testid="UserName"]');
-          result.content = text('[data-testid="tweetText"]');
-          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
-
-          const engagement = {};
-          document.querySelectorAll('[data-testid="reply"],[data-testid="retweet"],[data-testid="like"],[data-testid="bookmark"]').forEach(el => {
-            const label = el.getAttribute("aria-label") || "";
-            if (label.includes("Reply")) engagement.comments = label;
-            if (label.includes("Repost")) engagement.reposts = label;
-            if (label.includes("Like")) engagement.likes = label;
-            if (label.includes("Bookmark")) engagement.bookmarks = label;
-          });
-          result.engagement = engagement;
-        }
-
-        if (type === "community") {
-          result.name = text('h2[role="heading"]');
-          result.description = document.querySelector('[style*="-webkit-line-clamp"]')?.innerText || "";
-          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
-
-          const members = Array.from(document.querySelectorAll("span"))
-            .find(s => s.innerText === "Members")
-            ?.parentElement?.innerText;
-          result.memberCount = members?.replace("Members", "").trim() || "0";
-        }
-
-        return result;
-      }, contextType);
-
-      // normalize numbers
-      if (data.engagement) {
-        data.engagement = {
-          comments: normalizeCount(data.engagement.comments || "0"),
-          reposts: normalizeCount(data.engagement.reposts || "0"),
-          likes: normalizeCount(data.engagement.likes || "0"),
-          bookmarks: normalizeCount(data.engagement.bookmarks || "0")
-        };
-      }
-      data.followingCount = normalizeCount(data.followingCount);
-      data.followerCount = normalizeCount(data.followerCount);
-      data.memberCount = normalizeCount(data.memberCount);
-
-      return data;
+      const result = await this._scrapePage(twitterLink);
+      resolve(result);
     } catch (err) {
-      logger.error("SCRAPER_ERROR:", err.message);
-      return null;
+      logger.error("SCRAPER_QUEUE_ERROR:", err.message);
+      resolve(null);
+    } finally {
+      this.processing = false;
+      // slight delay to reduce memory spikes
+      setTimeout(() => this._processQueue(), 50);
     }
+  }
+
+  async _scrapePage(twitterLink) {
+    if (!this.page) throw new Error("Scraper not initialized. Call init() first.");
+
+    await gotoHumanLike(this.page, twitterLink);
+
+    const contextType = twitterLink.includes("/communities/") ? "community" :
+      twitterLink.includes("/status/") ? "post" : "profile";
+
+    const data = await this.page.evaluate((type) => {
+      const text = (sel) => document.querySelector(sel)?.innerText.trim() || "";
+      const result = { type };
+
+      if (type === "profile") {
+        result.name = text('[data-testid="UserName"]');
+        result.bio = text('[data-testid="UserDescription"]');
+        result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+
+        const stat = (label) =>
+          Array.from(document.querySelectorAll("a"))
+            .find(a => a.innerText.includes(label))
+            ?.innerText.replace(label, "").trim() || "0";
+
+        result.followingCount = stat("Following");
+        result.followerCount = stat("Followers");
+
+        result.joinedDate =
+          Array.from(document.querySelectorAll("span"))
+            .find(s => s.innerText.includes("Joined"))
+            ?.innerText || "";
+      }
+
+      if (type === "post") {
+        result.username = text('[data-testid="UserName"]');
+        result.content = text('[data-testid="tweetText"]');
+        result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+
+        const engagement = {};
+        document.querySelectorAll('[data-testid="reply"],[data-testid="retweet"],[data-testid="like"],[data-testid="bookmark"]').forEach(el => {
+          const label = el.getAttribute("aria-label") || "";
+          if (label.includes("Reply")) engagement.comments = label;
+          if (label.includes("Repost")) engagement.reposts = label;
+          if (label.includes("Like")) engagement.likes = label;
+          if (label.includes("Bookmark")) engagement.bookmarks = label;
+        });
+        result.engagement = engagement;
+      }
+
+      if (type === "community") {
+        result.name = text('h2[role="heading"]');
+        result.description = document.querySelector('[style*="-webkit-line-clamp"]')?.innerText || "";
+        result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+
+        const members = Array.from(document.querySelectorAll("span"))
+          .find(s => s.innerText === "Members")
+          ?.parentElement?.innerText;
+        result.memberCount = members?.replace("Members", "").trim() || "0";
+      }
+
+      return result;
+    }, contextType);
+
+    // normalize numbers
+    if (data.engagement) {
+      data.engagement = {
+        comments: normalizeCount(data.engagement.comments || "0"),
+        reposts: normalizeCount(data.engagement.reposts || "0"),
+        likes: normalizeCount(data.engagement.likes || "0"),
+        bookmarks: normalizeCount(data.engagement.bookmarks || "0")
+      };
+    }
+    data.followingCount = normalizeCount(data.followingCount);
+    data.followerCount = normalizeCount(data.followerCount);
+    data.memberCount = normalizeCount(data.memberCount);
+
+    return data;
   }
 
   async close() {
@@ -145,6 +169,8 @@ class XScraper {
       await this.browser.close();
       this.browser = null;
       this.page = null;
+      this.queue = [];
+      this.processing = false;
     }
   }
 }

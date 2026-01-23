@@ -1,36 +1,24 @@
 const { GetMetaData } = require('./src/Blockchain/metaData');
-const { scrapeX } = require('./src/Controller/offChainAna')
-const { createBrowser } = require("./src/pupbrowser/browser.js");
-const { warmUpXSession } = require("./src/pupbrowser/warmup.js");
-const { applyFingerprint } = require("./src/pupbrowser/fingerprint.js");
-
-// async function test() {
-//     const mintAddress = "DVYmgsdSovc6isvaWw2R5mHkPnVdiUuu8R6VuFPbpump"; 
-//     const rpcEndpoint = "https://api.mainnet-beta.solana.com"; // Replace with your RPC endpoint
-
-//     const metadata = await GetMetaData(mintAddress);
-//     console.log("Token Metadata:", metadata);
-// }
-
-// test();
+const scrapeX = require('./src/Controller/offChainAna')
+const scraper = new scrapeX()
 
 async function test() {
+    const mintAddress = "r3fcAzv5NXCPFf2GRPPxEkbAZQJRfaHcR8WQngEpump"; 
+    const rpcEndpoint = "https://api.mainnet-beta.solana.com"; // Replace with your RPC endpoint
 
-    browser = await createBrowser();
-    page = await browser.newPage();
-
-    await applyFingerprint(page);
-
-    // 🔥 RUN ONCE
-    await warmUpXSession(page);
-
-    await browser.close();
-
-    const link = "https://x.com/itisawonder"
-    const data = await scrapeX(link);
-    console.log('scrapped data:', data)
+    const metadata = await GetMetaData(mintAddress);
+    console.log("Token Metadata:", metadata);
 }
-test()
+
+test();
+
+// async function test() {
+//     await scraper.init()
+//     const link = "https://x.com/itisawonder"
+//     const data = await scraper.scrape(link);
+//     console.log('scrapped data:', data)
+// }
+// test()
 
 // const { Connection, Keypair, PublicKey } = require("@solana/web3.js");
 // const { PumpFunSDK } = require("@pump-fun/pump-swap-sdk");

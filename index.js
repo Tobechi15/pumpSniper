@@ -7,7 +7,7 @@ const { config } = require('./src/Utils/config.js');
 const { GetMetaData } = require('./src/Blockchain/metaData.js');
 const { logger } = require('./src/Utils/logger.js');
 
-const XScraper = require('./src/Controller/offChainAna.js');
+const XScraper = require('./src/Controller/offChainAna.js'); // queue-based scraper
 const GraduationDetector = require('./src/Controller/listener.js');
 const sendTelegramMessage = require('./src/Database/alert.js');
 
@@ -16,16 +16,13 @@ app.use(cors());
 app.use(express.json());
 
 /* ------------------ SERVICES ------------------ */
-
-const scraper = new XScraper();
-
+const scraper = new XScraper(); // single tab with queue
 const detector = new GraduationDetector(
   config.PUBLIC_RPC_URL,
   config.PUBLIC_WS_URL
 );
 
 /* ------------------ HEALTH ENDPOINTS ------------------ */
-
 app.get("/api/health", (req, res) => {
   res.json({
     status: "OK",
@@ -34,7 +31,6 @@ app.get("/api/health", (req, res) => {
 });
 
 /* ------------------ OFF‑CHAIN FILTER ------------------ */
-
 function passesOffChainCriteria(analysis) {
   if (!analysis) return false;
 
@@ -61,11 +57,10 @@ function passesOffChainCriteria(analysis) {
 }
 
 /* ------------------ MAIN BOOTSTRAP ------------------ */
-
 async function main() {
   try {
     logger.info("Initializing off‑chain scraper...");
-    await scraper.init(); // 🔥 single browser instance
+    await scraper.init(); // 🔥 single browser + queue
 
     logger.info("Starting graduation detector...");
     detector.start();
@@ -81,9 +76,9 @@ async function main() {
           return;
         }
 
-        logger.info(`Analyzing X source → ${metadata.twitterHandle}`);
-
-        const analysis = await scraper.scrape(metadata.twitterHandle);
+        logger.info(`Enqueueing scrape → ${metadata.twitterHandle}`);
+        // 🔹 Use queue to prevent simultaneous navigation crashes
+        const analysis = await scraper.enqueueScrape(metadata.twitterHandle);
 
         if (!analysis) {
           logger.warn(`FAILED → Off‑chain analysis error`);
@@ -132,7 +127,6 @@ async function main() {
 }
 
 /* ------------------ GRACEFUL SHUTDOWN ------------------ */
-
 process.on("SIGINT", async () => {
   logger.warn("Shutting down gracefully...");
   await scraper.close();
