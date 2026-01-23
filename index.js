@@ -1,14 +1,14 @@
 // index.js
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
 
 const { config } = require('./src/Utils/config.js');
 const { GetMetaData } = require('./src/Blockchain/metaData.js');
 const { logger } = require('./src/Utils/logger.js');
 
-const XScraper = require('./src/Controller/offChainAna.js'); // queue-based scraper
+const XScraper = require('./src/Controller/offChainAna.js');
 const GraduationDetector = require('./src/Controller/listener.js');
+const DexBoostQueue = require('./src/Controller/checkBoost.js');
 const sendTelegramMessage = require('./src/Database/alert.js');
 
 const app = express();
@@ -16,13 +16,30 @@ app.use(cors());
 app.use(express.json());
 
 /* ------------------ SERVICES ------------------ */
-const scraper = new XScraper(); // single tab with queue
+const scraper = new XScraper();
 const detector = new GraduationDetector(
   config.PUBLIC_RPC_URL,
   config.PUBLIC_WS_URL
 );
 
-/* ------------------ HEALTH ENDPOINTS ------------------ */
+const boostQueue = new DexBoostQueue({
+  chainId: "solana",
+  intervalMs: 8000,
+  concurrency: 2
+});
+
+/*
+  Token state store:
+  tokenMint => {
+    offChainPassed: boolean,
+    boosted: boolean,
+    boostRating: number,
+    metadata: object
+  }
+*/
+const tokenState = new Map();
+
+/* ------------------ HEALTH ------------------ */
 app.get("/api/health", (req, res) => {
   res.json({
     status: "OK",
@@ -30,11 +47,9 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-/* ------------------ OFF‑CHAIN FILTER ------------------ */
+/* ------------------ OFF-CHAIN FILTER ------------------ */
 function passesOffChainCriteria(analysis) {
   if (!analysis) return false;
-
-  logger.info(JSON.stringify(analysis, null, 2));
 
   switch (analysis.type) {
     case 'community':
@@ -56,57 +71,114 @@ function passesOffChainCriteria(analysis) {
   }
 }
 
-/* ------------------ MAIN BOOTSTRAP ------------------ */
+/* ------------------ FINAL APPROVAL ------------------ */
+function tryApprove(tokenMint) {
+  const state = tokenState.get(tokenMint);
+  if (!state) return;
+
+  // Require off-chain passed AND boost rating > 400
+  if (state.offChainPassed && state.boosted && state.boostRating > 400) {
+    logger.info(`APPROVED → Boost + Off-chain confirmed`, {
+      token: tokenMint,
+      name: state.metadata?.name,
+      boostRating: state.boostRating
+    });
+
+    sendTelegramMessage(
+      "APPROVED: Boost + Off-chain confirmed",
+      {
+        token: tokenMint,
+        name: state.metadata?.name,
+        boostRating: state.boostRating
+      }
+    );
+
+    // Clean up state
+    tokenState.delete(tokenMint);
+  }
+}
+
+/* ------------------ BOOTSTRAP ------------------ */
 async function main() {
   try {
-    logger.info("Initializing off‑chain scraper...");
-    await scraper.init(); // 🔥 single browser + queue
+    logger.info("Initializing off-chain scraper...");
+    await scraper.init();
+
+    logger.info("Starting Dexscreener boost queue...");
+    boostQueue.start();
 
     logger.info("Starting graduation detector...");
     detector.start();
 
+    /* -------- BOOST EVENT -------- */
+    boostQueue.on("boosted", ({ tokenAddress, boostData }) => {
+      const boostRating = boostData?.active || 0;
+
+      if (boostRating <= 400) {
+        logger.info(`BOOST IGNORED → Rating too low: ${boostRating}`, {
+          token: tokenAddress
+        });
+        return;
+      }
+
+      logger.info(`BOOST DETECTED → ${tokenAddress}`, { boostRating });
+
+      const state = tokenState.get(tokenAddress);
+      if (!state) return;
+
+      state.boosted = true;
+      state.boostRating = boostRating;
+
+      tryApprove(tokenAddress);
+    });
+
+    /* -------- BOOST EXPIRY EVENT -------- */
+    boostQueue.on("expired", ({ tokenAddress, lifetimeMs }) => {
+      logger.info(`BOOST TIMEOUT → Removing token state`, {
+        token: tokenAddress,
+        lifetimeMinutes: Math.floor(lifetimeMs / 60000)
+      });
+
+      if (tokenState.has(tokenAddress)) {
+        tokenState.delete(tokenAddress);
+      }
+    });
+
+    /* -------- GRADUATION EVENT -------- */
     detector.on('graduated', async (tokenMint) => {
       logger.info(`TRIGGER → Token graduated: ${tokenMint}`);
 
+      // Start boost monitoring immediately
+      boostQueue.addToken(tokenMint);
+
+      tokenState.set(tokenMint, {
+        offChainPassed: false,
+        boosted: false,
+        boostRating: 0,
+        metadata: null
+      });
+
       try {
         const metadata = await GetMetaData(tokenMint);
+        tokenState.get(tokenMint).metadata = metadata;
 
         if (!metadata?.twitterHandle) {
-          logger.warn(`SKIP → No Twitter handle for ${tokenMint}`);
+          logger.warn(`SKIP → No Twitter handle`);
           return;
         }
 
-        logger.info(`Enqueueing scrape → ${metadata.twitterHandle}`);
-        // 🔹 Use queue to prevent simultaneous navigation crashes
         const analysis = await scraper.enqueue(metadata.twitterHandle);
 
-        if (!analysis) {
-          logger.warn(`FAILED → Off‑chain analysis error`);
-          return;
-        }
-
         if (!passesOffChainCriteria(analysis)) {
-          logger.info(`REJECTED → Criteria not met`, {
-            token: tokenMint,
-            type: analysis.type
-          });
+          logger.info(`REJECTED → Off-chain criteria failed`);
           return;
         }
 
-        logger.info(`APPROVED → Off‑chain validation passed`, {
-          token: tokenMint,
-          name: metadata.name,
-          type: analysis.type
-        });
+        logger.info(`OFF-CHAIN PASSED → Waiting for boost`);
+        tokenState.get(tokenMint).offChainPassed = true;
 
-        sendTelegramMessage(
-          `APPROVED: Off‑chain analysis passed`,
-          {
-            token: tokenMint,
-            name: metadata.name,
-            type: analysis.type
-          }
-        );
+        // If boost already arrived earlier
+        tryApprove(tokenMint);
 
       } catch (err) {
         logger.error(`PROCESSING ERROR (${tokenMint}): ${err.message}`);
@@ -126,7 +198,7 @@ async function main() {
   }
 }
 
-/* ------------------ GRACEFUL SHUTDOWN ------------------ */
+/* ------------------ SHUTDOWN ------------------ */
 process.on("SIGINT", async () => {
   logger.warn("Shutting down gracefully...");
   await scraper.close();
