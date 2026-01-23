@@ -78,7 +78,7 @@ async function main() {
 
         logger.info(`Enqueueing scrape → ${metadata.twitterHandle}`);
         // 🔹 Use queue to prevent simultaneous navigation crashes
-        const analysis = await scraper.enqueueScrape(metadata.twitterHandle);
+        const analysis = await scraper.enqueue(metadata.twitterHandle);
 
         if (!analysis) {
           logger.warn(`FAILED → Off‑chain analysis error`);
