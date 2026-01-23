@@ -87,7 +87,7 @@ class GraduationDetector extends EventEmitter {
     this.PUMP_MIGRATION_PROGRAM = new PublicKey('39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg');
 
     this.seen = new TTLCache(1 * 60 * 1000); // 10min TTL
-    this.seenToke = new TTLCache(1 * 60 * 1000); // 10min TTL
+    this.seenTokens = new TTLCache(1 * 60 * 1000); // 10min TTL
   }
 
   async start() {
