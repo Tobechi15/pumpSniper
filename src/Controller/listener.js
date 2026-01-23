@@ -86,7 +86,8 @@ class GraduationDetector extends EventEmitter {
     this.connection = new Connection(rpcUrl, { wsEndpoint: wssUrl });
     this.PUMP_MIGRATION_PROGRAM = new PublicKey('39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg');
 
-    this.seen = new TTLCache(10 * 60 * 1000); // 10min TTL
+    this.seen = new TTLCache(1 * 60 * 1000); // 10min TTL
+    this.seenToke = new TTLCache(1 * 60 * 1000); // 10min TTL
   }
 
   async start() {
@@ -125,9 +126,8 @@ class GraduationDetector extends EventEmitter {
           }
           if (!tokenMint) return;
 
-          const dedupeKey = `${signature}-${tokenMint}`;
-          if (this.seen.has(dedupeKey)) return;
-          this.seen.set(dedupeKey);
+          if (this.seenTokens.has(tokenMint)) return;
+          this.seenTokens.set(tokenMint);;
 
           logger.info(`Signature: ${signature}`);
           this.emit('graduated', tokenMint);
