@@ -130,20 +130,12 @@ class XScraper {
               ?.innerText || "";
         }
 
-        if (type === "post") {
-          result.username = text('[data-testid="UserName"]');
+        if (type === 'post') {
+          // In single post view, the main tweet is often the first 'article' or tweet test-id
+          result.username = text('[data-testid="User-Name"]');
           result.content = text('[data-testid="tweetText"]');
+          result.engagement = text('[role="group"][aria-label*="replies"]');
           result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
-
-          const engagement = {};
-          document.querySelectorAll('[data-testid="reply"],[data-testid="retweet"],[data-testid="like"],[data-testid="bookmark"]').forEach(el => {
-            const label = el.getAttribute("aria-label") || "";
-            if (label.includes("Reply")) engagement.comments = label;
-            if (label.includes("Repost")) engagement.reposts = label;
-            if (label.includes("Like")) engagement.likes = label;
-            if (label.includes("Bookmark")) engagement.bookmarks = label;
-          });
-          result.engagement = engagement;
         }
 
         if (type === "community") {
@@ -160,15 +152,16 @@ class XScraper {
         return result;
       }, contextType);
 
-      // normalize numbers
-      if (data.engagement) {
-        data.engagement = {
-          comments: normalizeCount(data.engagement.comments || "0"),
-          reposts: normalizeCount(data.engagement.reposts || "0"),
-          likes: normalizeCount(data.engagement.likes || "0"),
-          bookmarks: normalizeCount(data.engagement.bookmarks || "0")
-        };
-      }
+      const engagementStr = data.engagement || "";
+      const parts = engagementStr.split('\n');
+
+      data.engagement = {
+        comments: normalizeCount(parts[0] || "0"),
+        reposts: normalizeCount(parts[1] || "0"),
+        likes: normalizeCount(parts[2] || "0"),
+        bookmarks: normalizeCount(parts[3] || "0")
+      };
+
       data.followingCount = normalizeCount(data.followingCount);
       data.followerCount = normalizeCount(data.followerCount);
       data.memberCount = normalizeCount(data.memberCount);
