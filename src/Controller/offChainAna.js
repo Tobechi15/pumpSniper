@@ -33,68 +33,67 @@ async function gotoHumanLike(page, url) {
 
 /* ------------------ scraper with queue and page recycling ------------------ */
 class XScraper {
-  constructor({ recycleAfter = 3 } = {}) {
+  constructor({ recycleAfter = 2 } = {}) { // Lowered to 2 for 512MB RAM
     this.browser = null;
     this.page = null;
-    this.userDataDir = "./x-session"; // persistent session
+    this.userDataDir = "./x-session";
     this.queue = [];
     this.active = false;
     this.scrapeCount = 0;
-    this.recycleAfter = recycleAfter; // recycle page after N scrapes
+    this.recycleAfter = recycleAfter;
   }
 
   async init() {
-    if (!this.browser) {
-      this.browser = await puppeteer.launch({
-        headless: "new",
-        userDataDir: this.userDataDir,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-blink-features=AutomationControlled",
-          "--window-size=1280,1600"
-        ]
-      });
-    }
-    if (!this.page) {
-      this.page = await this.browser.newPage();
-      await applyFingerprint(this.page);
-    }
-  }
+    if (this.browser) return; // Prevent double init
 
-  async enqueue(twitterLink) {
-    return new Promise((resolve) => {
-      this.queue.push({ twitterLink, resolve });
-      if (!this.active) this.runQueue();
+    this.browser = await puppeteer.launch({
+      headless: "new",
+      userDataDir: this.userDataDir,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage", // Crucial for low-memory Linux environments
+        "--disable-gpu",
+        "--disable-extensions",
+        "--disable-images",
+        "--no-zygote", // Saves memory by not pre-forking
+        "--js-flags='--max-old-space-size=128'",
+      ]
     });
+    this.page = await this.browser.newPage();
+    // Block CSS and Fonts to save bandwidth and RAM
+    await this.page.setRequestInterception(true);
+    this.page.on('request', (req) => {
+      if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+    await applyFingerprint(this.page);
   }
 
   async runQueue() {
     this.active = true;
-
     while (this.queue.length) {
       const { twitterLink, resolve } = this.queue.shift();
-
       try {
-        // Recycle page if needed
+        // FULL RECYCLE: Close entire browser after N scrapes
         if (this.scrapeCount >= this.recycleAfter) {
-          await this.page.close();
-          this.page = await this.browser.newPage();
-          await applyFingerprint(this.page);
+          logger.info("Hard recycling Browser process to clear RAM...");
+          await this.close();
+          await this.init();
           this.scrapeCount = 0;
-          logger.info("Recycled scraper page to free memory.");
         }
 
         const result = await this.scrape(twitterLink);
         this.scrapeCount++;
         resolve(result);
-
       } catch (err) {
         logger.error("SCRAPER_QUEUE_ERROR:", err.message);
         resolve(null);
       }
     }
-
     this.active = false;
   }
 
@@ -175,10 +174,19 @@ class XScraper {
   }
 
   async close() {
-    if (this.page) await this.page.close();
-    if (this.browser) await this.browser.close();
-    this.page = null;
-    this.browser = null;
+    try {
+      if (this.page) {
+        await this.page.close().catch(() => { }); // Ignore if already closed 
+      }
+      if (this.browser) {
+        await this.browser.close().catch(() => { }); // Ignore if already closed 
+      }
+    } catch (err) {
+      // Silence PID errors during shutdown
+    } finally {
+      this.page = null;
+      this.browser = null;
+    }
   }
 }
 

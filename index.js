@@ -98,6 +98,16 @@ function tryApprove(tokenMint) {
   }
 }
 
+setInterval(() => {
+  const used = process.memoryUsage();
+  console.log({
+    rssMB: Math.round(used.rss / 1024 / 1024),
+    heapUsedMB: Math.round(used.heapUsed / 1024 / 1024),
+    heapTotalMB: Math.round(used.heapTotal / 1024 / 1024),
+  });
+}, 10000);
+
+
 /* ------------------ BOOTSTRAP ------------------ */
 async function main() {
   try {
@@ -138,12 +148,15 @@ async function main() {
         token: tokenAddress,
         lifetimeMinutes: Math.floor(lifetimeMs / 60000)
       });
-
       if (tokenState.has(tokenAddress)) {
         tokenState.delete(tokenAddress);
       }
     });
 
+
+    boostQueue.on("error", ({ tokenAddress, message }) => {
+      logger.warn(`DexBoostQueue error → ${tokenAddress}: ${message}`);
+    });
     /* -------- GRADUATION EVENT -------- */
     detector.on('graduated', async (tokenMint) => {
       logger.info(`TRIGGER → Token graduated: ${tokenMint}`);
@@ -201,7 +214,16 @@ async function main() {
 /* ------------------ SHUTDOWN ------------------ */
 process.on("SIGINT", async () => {
   logger.warn("Shutting down gracefully...");
-  await scraper.close();
+  
+  // Set a timeout so the process definitely dies within 2 seconds
+  setTimeout(() => {
+    logger.error("Forced exit after timeout");
+    process.exit(1);
+  }, 2000);
+
+  if (scraper) {
+    await scraper.close();
+  }
   process.exit(0);
 });
 
