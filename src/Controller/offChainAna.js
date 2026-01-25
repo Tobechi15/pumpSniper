@@ -169,7 +169,7 @@ class XScraper {
 
       return data;
     } catch (err) {
-      logger.error("SCRAPER_ERROR:", err.message);
+      logger.error("SCRAPER_ERROR:", err);
       return null;
     }
   }
