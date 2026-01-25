@@ -98,16 +98,6 @@ function tryApprove(tokenMint) {
   }
 }
 
-setInterval(() => {
-  const used = process.memoryUsage();
-  console.log({
-    rssMB: Math.round(used.rss / 1024 / 1024),
-    heapUsedMB: Math.round(used.heapUsed / 1024 / 1024),
-    heapTotalMB: Math.round(used.heapTotal / 1024 / 1024),
-  });
-}, 10000);
-
-
 /* ------------------ BOOTSTRAP ------------------ */
 async function main() {
   try {
