@@ -37,7 +37,7 @@ async function gotoHumanLike(page, url) {
 
 /* ------------------ optimized scraper ------------------ */
 class XScraper {
-  constructor({ recycleAfter = 3 } = {}) {
+  constructor({ recycleAfter = 2 } = {}) {
     this.browser = null;
     this.page = null;
     this.userDataDir = "./x-session";

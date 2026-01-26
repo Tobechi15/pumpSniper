@@ -4,7 +4,7 @@ const { logger } = require('../Utils/logger');
 
 // ---------------- RPC QUEUE (Memory & Rate Limit Optimized) ----------------
 class RpcQueue {
-    constructor({ concurrency = 1, minDelay = 800 }) {
+    constructor({ concurrency = 1, minDelay = 1200 }) { // Increased delay for public RPC safety
         this.queue = [];
         this.active = 0;
         this.concurrency = concurrency;
@@ -18,7 +18,6 @@ class RpcQueue {
         });
     }
 
-    // Wipe pending tasks if we hit a 429
     clear() {
         while (this.queue.length > 0) {
             const item = this.queue.shift();
@@ -48,7 +47,7 @@ class RpcQueue {
     }
 }
 
-const rpcQueue = new RpcQueue({ concurrency: 1, minDelay: 800 });
+const rpcQueue = new RpcQueue({ concurrency: 1, minDelay: 1200 });
 
 // ---------------- CIRCUIT BREAKER ----------------
 let rateLimitedUntil = 0;
@@ -83,7 +82,7 @@ class TTLCache {
 
     set(key) {
         this.map.set(key, Date.now());
-        if (this.map.size > 100) this.prune(); // Prevent map bloating
+        if (this.map.size > 50) this.prune(); // Kept very small for 512MB RAM
     }
 
     prune() {
@@ -100,7 +99,7 @@ class GraduationDetector extends EventEmitter {
         super();
         this.connection = new Connection(rpcUrl, { 
             wsEndpoint: wssUrl,
-            disableRetryOnRateLimit: true, // Prevent internal web3.js loops
+            disableRetryOnRateLimit: true, // Crucial: Stop hidden background memory-leak loops
             commitment: 'confirmed'
         });
         this.PUMP_MIGRATION_PROGRAM = new PublicKey('39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg');
@@ -110,27 +109,35 @@ class GraduationDetector extends EventEmitter {
     }
 
     async start() {
-        logger.info("Monitoring Pump.fun graduations...");
+        logger.info("Monitoring Pump.fun graduations (Success Only Mode)...");
 
         this.connection.onLogs(
             this.PUMP_MIGRATION_PROGRAM,
             async (logs) => {
+                // 1. SKIP FAILED TXS: Only proceed if logs.err is null (Success)
+                // This stops 90% of the spam that causes 429s.
+                if (logs.err !== null) return;
+
                 if (isRateLimited()) return;
 
                 try {
-                    // Quick check to ignore non-migration logs
-                    if (!logs.logs.some(l => l.includes("Migrate"))) return;
+                    // 2. SPECIFIC LOG FILTER
+                    const isActualMigrate = logs.logs.some(l => 
+                        l.includes("Program log: Instruction: Migrate")
+                    );
+                    if (!isActualMigrate) return;
 
                     const signature = logs.signature;
                     if (this.seen.has(signature)) return;
                     this.seen.set(signature);
 
+                    // 3. FETCH FULL TRANSACTION (Queued)
                     const tx = await rpcQueue.push(() =>
                         this.connection.getParsedTransaction(signature, {
                             maxSupportedTransactionVersion: 0,
                         }).catch(err => {
                             if (err.message?.includes("429")) {
-                                triggerRateLimitPause(30000);
+                                triggerRateLimitPause(45000); // Wait longer on 429
                             }
                             throw err; 
                         })
@@ -138,12 +145,13 @@ class GraduationDetector extends EventEmitter {
 
                     if (!tx || !tx.transaction) return;
 
+                    // 4. EXTRACT TOKEN MINT
                     const accounts = tx.transaction.message.accountKeys;
                     let tokenMint = null;
 
-                    // Efficiently find the 'pump' token mint
                     for (let i = 0; i < accounts.length; i++) {
                         const pubkey = accounts[i].pubkey.toString();
+                        // Pump.fun tokens always end with 'pump'
                         if (pubkey.endsWith('pump')) {
                             tokenMint = pubkey;
                             break;
@@ -152,17 +160,17 @@ class GraduationDetector extends EventEmitter {
 
                     if (tokenMint && !this.seenTokens.has(tokenMint)) {
                         this.seenTokens.set(tokenMint);
-                        logger.info(`GRADUATION → ${tokenMint}`);
+                        logger.info(`✅ GRADUATION CONFIRMED → ${tokenMint}`);
                         this.emit('graduated', tokenMint);
                     }
 
-                    // MANUAL GC: Help Node.js clear the large TX object
+                    // 5. CRITICAL RAM CLEANUP: Explicitly drop large objects
                     tx.transaction = null;
 
                 } catch (err) {
                     const msg = err.message || "";
                     if (!msg.includes("Queue cleared") && !msg.includes("Rate limited")) {
-                        logger.warn(`Error processing log: ${msg.substring(0, 100)}`);
+                        logger.warn(`Listener Error: ${msg.substring(0, 80)}`);
                     }
                 }
             },

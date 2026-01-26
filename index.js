@@ -51,8 +51,6 @@ app.get("/api/health", (req, res) => {
 function passesOffChainCriteria(analysis) {
   if (!analysis) return false;
 
-  logger.info(JSON.stringify(analysis, null, 2));
-
   switch (analysis.type) {
     case 'community':
       return analysis.memberCount > 400;
