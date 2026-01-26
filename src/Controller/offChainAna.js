@@ -1,6 +1,5 @@
 const { logger } = require('../Utils/logger.js');
 const puppeteer = require("puppeteer");
-const { warmUpXSession } = require("../pupbrowser/warmup.js"); // Added back
 const { applyFingerprint } = require("../pupbrowser/fingerprint.js");
 
 /* ------------------ helpers ------------------ */
@@ -79,7 +78,6 @@ class XScraper {
     });
 
     await applyFingerprint(this.page);
-    await warmUpXSession(this.page);
   }
 
   async enqueue(twitterLink) {
