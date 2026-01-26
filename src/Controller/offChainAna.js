@@ -176,7 +176,7 @@ class XScraper {
 
       return data;
     } catch (err) {
-      logger.error(`SCRAPE_FAILED for ${twitterLink}:`, err.message);
+      logger.error(`SCRAPE_FAILED for ${twitterLink}`, err);
       return null;
     }
   }
