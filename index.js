@@ -61,12 +61,7 @@ function tryApprove(tokenMint) {
     });
 
     sendTelegramMessage(
-      "APPROVED: Boost confirmed",
-      {
-        token: tokenMint,
-        name: state.metadata?.name,
-        boostRating: state.boostRating
-      }
+        `APPROVED: Boost confirmed for ${tokenMint}`
     );
 
     // Cleanup memory
