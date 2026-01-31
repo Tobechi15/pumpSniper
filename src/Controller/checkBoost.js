@@ -10,7 +10,7 @@ class DexBoostQueue extends EventEmitter {
         this.chainId = options.chainId || "solana";
 
         // 2 hours hard timeout (ms)
-        this.maxLifetimeMs = options.maxLifetimeMs || 30 * 60 * 1000;
+        this.maxLifetimeMs = options.maxLifetimeMs || 5 * 60 * 60 * 1000;
 
         this.queue = [];
         this.activeWorkers = 0;
