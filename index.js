@@ -53,7 +53,7 @@ function tryApprove(tokenMint) {
   const state = tokenState.get(tokenMint);
   if (!state) return;
 
-  if (state.boosted && state.boostRating > 400) {
+  if (state.boosted && state.boostRating >= 50) {
     logger.info(`APPROVED → Boost confirmed`, {
       token: tokenMint,
       name: state.metadata?.name,
@@ -61,7 +61,11 @@ function tryApprove(tokenMint) {
     });
 
     sendTelegramMessage(
-        `APPROVED: Boost confirmed for ${tokenMint}`
+        `APPROVED: Boost confirmed for: \n`+
+        `Name: ${state.metadata?.name || tokenMint} \n`+
+        `Token address: ${tokenMint} \n`+
+        `Boosted Rating: ${state.boostRating}`,
+        `time launched: ${state.createdAt}`
     );
 
     // Cleanup memory
@@ -83,7 +87,7 @@ async function main() {
     boostQueue.on("boosted", ({ tokenAddress, boostData }) => {
       const boostRating = boostData?.active || 0;
 
-      if (boostRating <= 400) {
+      if (boostRating <= 45) {
         logger.info(`BOOST IGNORED → Rating too low: ${boostRating}`, {
           token: tokenAddress
         });
