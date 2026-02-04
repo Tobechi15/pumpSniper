@@ -1,62 +1,77 @@
-const { Connection, Keypair, PublicKey } = require("@solana/web3.js");
-const { PumpAmmSdk } = require("@pump-fun/pump-swap-sdk");
+const { Connection, Keypair, VersionedTransaction } = require("@solana/web3.js");
+const axios = require("axios"); // Swapping fetch for axios
 const bs58 = require("bs58").default;
 const { config } = require("../Utils/config");
 const { logger } = require("../Utils/logger.js");
 
-const RPC_ENDPOINT = config.PUBLIC_RPC_URL;
-const PRIVATE_KEY = config.WALLET_SECRET;
+// const connection = new Connection(config.PUBLIC_RPC_URL, "confirmed");
+const wallet = Keypair.fromSecretKey(bs58.decode(config.WALLET_SECRET));
 
-const connection = new Connection(RPC_ENDPOINT, "confirmed");
-const wallet = Keypair.fromSecretKey(bs58.decode(PRIVATE_KEY));
-
-// Initialize the SDK
-const sdk = new PumpAmmSdk(connection);
+// Constants for Jupiter Ultra
+const JUP_ULTRA_URL = "https://api.jup.ag/ultra/v1";
+const JUP_API_KEY = config.JUPITER_API_KEY; // Ensure this is in your config
 
 /**
- * Executes a buy for any pump.fun token (Bonding Curve OR PumpSwap AMM)
- * @param {string} mintAddress - The token mint
- * @param {number} solAmount - Amount in SOL (e.g., 0.1)
- * @param {number} slippageBps - Slippage in basis points (100 = 1%)
+ * Executes an ultra-fast buy using Jupiter Ultra API
  */
-async function executeBuy(mintAddress, solAmount, slippageBps = 100) {
+async function executeBuy(mintAddress, solAmount) {
   try {
-    const mint = new PublicKey(mintAddress);
-    const lamports = BigInt(Math.floor(solAmount * 1_000_000_000));
+    const lamports = Math.floor(solAmount * 1_000_000_000);
+    const inputMint = "So11111111111111111111111111111111111111112"; // WSOL
 
-    logger.info(`🚀 Preparing buy for ${mintAddress}...`);
+    logger.info(`🔥 Initiating Ultra Swap for ${mintAddress}...`);
 
-    // 1. Fetch the state. 
-    // The SDK automatically detects if it's on the curve or the AMM.
-    const swapState = await sdk.swapSolanaState(mint, wallet.publicKey);
+    // 1. Create the Order
+    // Ultra handles the routing and transaction creation in one go
+    const { data: orderResponse } = await axios.get(`${JUP_ULTRA_URL}/order`, {
+      params: {
+        inputMint: inputMint,
+        outputMint: mintAddress,
+        amount: lamports.toString(),
+        taker: wallet.publicKey.toString(),
+      },
+      headers: {
+        "x-api-key": JUP_API_KEY,
+      },
+    });
 
-    // 2. Calculate the quote
-    // buyQuoteInput returns the expected token output and required instructions
-    const result = await sdk.buyQuoteInput(
-      swapState,
-      lamports,
-      BigInt(slippageBps)
-    );
+    console.log("Order Response:", orderResponse);
 
-    logger.info(`📦 Instructions generated. Signing and sending...`);
+    if (!orderResponse.transaction) {
+      throw new Error("Failed to retrieve swap transaction from Ultra API");
+    }
 
-    // 3. Sign and Execute
-    // The second argument [wallet] handles the automatic signing.
-    const signature = await sdk.sendAndConfirm(
-      result.instructions, 
-      [wallet], 
+    // 2. Deserialize and Sign
+    const swapTransactionBuf = Buffer.from(orderResponse.transaction, "base64");
+    const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+    
+    // We sign here, but Jupiter Ultra often handles the broadcast/landing 
+    // depending on your account tier and priority settings.
+    transaction.sign([wallet]);
+
+    // 3. Send via Ultra (Submit)
+    // Note: Some Ultra setups prefer you POST the signed tx back to them 
+    // to benefit from their proprietary landing service.
+    const { data: submitResponse } = await axios.post(
+      `${JUP_ULTRA_URL}/submit`,
       {
-        skipPreflight: true,
-        maxRetries: 3,
-        preflightCommitment: "confirmed"
+        signedTransaction: Buffer.from(transaction.serialize()).toString("base64"),
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": JUP_API_KEY,
+        },
       }
     );
 
-    logger.info(`✅ Success! Tx: https://solscan.io/tx/${signature}`);
-    return signature;
+    logger.info(`✅ Ultra Tx Submitted! TxID: ${submitResponse.signature}`);
+    return submitResponse.signature;
 
   } catch (err) {
-    logger.error("❌ executeBuy Error:", err.message || err);
+    // Axios puts the error response in err.response.data
+    const errorMsg = err.response ? JSON.stringify(err.response.data) : err;
+    logger.error("❌ Ultra Swap Error:", errorMsg);
     return null;
   }
 }

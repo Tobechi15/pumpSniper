@@ -56,15 +56,21 @@ function isRateLimited() {
 }
 
 function triggerRateLimitPause(ms = 30000) {
-    if (isRateLimited()) return; 
+    if (isRateLimited()) return;
     rateLimitedUntil = Date.now() + ms;
-    rpcQueue.clear(); 
+    rpcQueue.clear();
     logger.warn(`!!! RPC 429 DETECTED !!! Cooling down for ${ms / 1000}s. Queue cleared.`);
 }
 
+const prefixes = ["T5bZ"];
+
+const ACCOUNT_INDEX_MAP = {
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P": { mint: [2, 14], vault: [17, 18], pair: [9] }, // Saber
+};
+
 // ---------------- TTL CACHE (Memory Friendly) ----------------
 class TTLCache {
-    constructor(ttl = 60000) { 
+    constructor(ttl = 60000) {
         this.ttl = ttl;
         this.map = new Map();
     }
@@ -97,14 +103,14 @@ class TTLCache {
 class GraduationDetector extends EventEmitter {
     constructor(rpcUrl, wssUrl) {
         super();
-        this.connection = new Connection(rpcUrl, { 
+        this.connection = new Connection(rpcUrl, {
             wsEndpoint: wssUrl,
             disableRetryOnRateLimit: true, // Crucial: Stop hidden background memory-leak loops
             commitment: 'confirmed'
         });
         this.PUMP_MIGRATION_PROGRAM = new PublicKey('39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg');
 
-        this.seen = new TTLCache(60000); 
+        this.seen = new TTLCache(60000);
         this.seenTokens = new TTLCache(60000);
     }
 
@@ -122,7 +128,7 @@ class GraduationDetector extends EventEmitter {
 
                 try {
                     // 2. SPECIFIC LOG FILTER
-                    const isActualMigrate = logs.logs.some(l => 
+                    const isActualMigrate = logs.logs.some(l =>
                         l.includes("Program log: Instruction: Migrate")
                     );
                     if (!isActualMigrate) return;
@@ -139,29 +145,57 @@ class GraduationDetector extends EventEmitter {
                             if (err.message?.includes("429")) {
                                 triggerRateLimitPause(45000); // Wait longer on 429
                             }
-                            throw err; 
+                            throw err;
                         })
                     );
 
                     if (!tx || !tx.transaction) return;
 
                     // 4. EXTRACT TOKEN MINT
-                    const accounts = tx.transaction.message.accountKeys;
-                    let tokenMint = null;
 
-                    for (let i = 0; i < accounts.length; i++) {
-                        const pubkey = accounts[i].pubkey.toString();
-                        // Pump.fun tokens always end with 'pump'
-                        if (pubkey.endsWith('pump')) {
-                            tokenMint = pubkey;
-                            break;
+                    let token0Mint = null;
+                    let token1Mint = null;
+                    let token0Vault = null;
+                    let token1Vault = null;
+                    let pairAddress = null;
+
+                    const programId = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+                    const instructions = tx.transaction.message?.instructions ?? [];
+                    const map = ACCOUNT_INDEX_MAP[programId];
+
+                    for (const ix of instructions) {
+                        const ixProgramId = typeof ix.programId === "string" ? ix.programId : ix.programId.toBase58();
+                        if (ixProgramId !== programId) continue;
+
+                        if (!ix.data || !prefixes.some(prefix => ix.data.startsWith(prefix))) continue;
+
+                        const accounts = (ix.accounts || []).map(a => typeof a === "string" ? a : a?.toBase58?.());
+
+                        if (accounts.length <= Math.max(...map.vault, ...map.mint)) {
+                            logger.info(`[INFO] Program ${programId} instruction had too few accounts`);
+                            continue;
                         }
+
+                        token0Mint = accounts[map.mint[0]];
+                        token1Mint = accounts[map.mint[1]];
+                        token0Vault = accounts[map.vault[0]];
+                        token1Vault = accounts[map.vault[1]];
+                        pairAddress = accounts[map.pair[0]];
+
+                        break;
                     }
 
-                    if (tokenMint && !this.seenTokens.has(tokenMint)) {
-                        this.seenTokens.set(tokenMint);
-                        logger.info(`✅ GRADUATION CONFIRMED → ${tokenMint}`);
-                        this.emit('graduated', tokenMint);
+                    const tokenData = {
+                        token0Mint,
+                        token1Mint,
+                        token0Vault,
+                        token1Vault
+                    }
+                    
+                    if (token0Mint && !this.seenTokens.has(token0Mint)) {
+                        this.seenTokens.set(token0Mint);
+                        logger.info(`✅ GRADUATION CONFIRMED → ${token0Mint}`);
+                        this.emit('graduated', tokenData);
                     }
 
                     // 5. CRITICAL RAM CLEANUP: Explicitly drop large objects

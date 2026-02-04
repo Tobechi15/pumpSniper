@@ -11,6 +11,7 @@ const config = {
   WALLET_SECRET: process.env.WALLET_PRIVATE_KEY,
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID.split(","),
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+  JUPITER_API_KEY: process.env.JUPITER_API_KEY,
 
 
 

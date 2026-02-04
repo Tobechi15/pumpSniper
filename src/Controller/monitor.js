@@ -1,42 +1,18 @@
 const { executeBuy } = require("../Trade/executeBuy")
 const { executeSell } = require("../Trade/executeSell");
+const { getPrice } = require('../Blockchain/getPrice')
 const { burner } = require("../Trade/closeRent");
 const { logger } = require("../Utils/logger");
-const { Connection, PublicKey } = require("@solana/web3.js");
-const { PumpAmmSdk } = require("@pump-fun/pump-swap-sdk");
-const { config } = require("../Utils/config");
 
 // Configuration
 const POSITIONS = new Map(); // Tracks: { mint: { entryPrice, amount, step: 0 } }
 const TAKE_PROFIT_LEVELS = [2.0, 3.5, 5.0]; // 2x, 3.5x, 5x
 const SELL_PERCENTAGES = [0.25, 0.25, 0.50]; // Sell 25%, 25%, then remaining 50%
 
-
-
-
-const connection = new Connection(config.PRIVATE_RPC_URL, "confirmed");
-const sdk = new PumpAmmSdk(connection);
-
-async function fetchCurrentPrice(mintAddress) {
-  try {
-    const mint = new PublicKey(mintAddress);
-    const swapState = await sdk.swapSolanaState(mint);
-    
-    const solReserves = Number(swapState.virtualSolReserves);
-    const tokenReserves = Number(swapState.virtualTokenReserves);
-
-    const priceInSol = (solReserves / 1e9) / (tokenReserves / 1e6);
-    return priceInSol;
-
-  } catch (err) {
-    logger.error("❌ Failed to fetch SDK price:", err.message);
-    return null;
-  }
-}
 /**
  * Main Monitoring Loop
  */
-async function monitorPrice(mintAddress) {
+async function monitorPrice(mintAddress, Vault0, Vault1) {
     if (POSITIONS.has(mintAddress)) return;
 
     logger.info(`👀 Monitoring started for: ${mintAddress}`);
@@ -45,7 +21,7 @@ async function monitorPrice(mintAddress) {
     // for sub-second price updates.
     const priceInterval = setInterval(async () => {
         try {
-            const currentPrice = await fetchCurrentPrice(mintAddress);
+            const currentPrice = await getPrice(Vault0, Vault1);
             const position = POSITIONS.get(mintAddress);
 
             if (!position) return;
@@ -81,10 +57,10 @@ async function monitorPrice(mintAddress) {
 
 //External trigger to add a new buy
 
-async function triggerNewTrade(mintAddress, solAmount) {
+async function triggerNewTrade(mintAddress, solAmount, Vault0, Vault1) {
     logger.info(`🚀 Signal Received: Buying ${solAmount} SOL of ${mintAddress}`);
     
-    const buyResult = await swapToken(mintAddress, solAmount * 1e9);
+    const buyResult = await executeBuy(mintAddress, solAmount);
     
     if (buyResult) {
         const entryPrice = await fetchCurrentPrice(mintAddress);
@@ -93,7 +69,7 @@ async function triggerNewTrade(mintAddress, solAmount) {
             amount: buyResult.outAmount,
             step: 0
         });
-        monitorPrice(mintAddress);
+        monitorPrice(mintAddress, Vault0, Vault1);
     }
 }
 

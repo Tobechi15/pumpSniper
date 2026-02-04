@@ -9,6 +9,7 @@ const { logger } = require('./src/Utils/logger.js');
 const GraduationDetector = require('./src/Controller/listener.js');
 const DexBoostQueue = require('./src/Controller/checkBoost.js');
 const sendTelegramMessage = require('./src/Database/alert.js');
+const { triggerNewTrade } = require("./src/Controller/monitor.js");
 
 const app = express();
 app.use(cors());
@@ -60,13 +61,17 @@ function tryApprove(tokenMint) {
       boostRating: state.boostRating
     });
 
+    const link = 'https://dexscreener.com/solana/' + tokenMint;
     sendTelegramMessage(
         `APPROVED: Boost confirmed for: \n`+
         `Name: ${state.metadata?.name || tokenMint} \n`+
+        `link: ${link} \n`+
         `Token address: ${tokenMint} \n`+
-        `Boosted Rating: ${state.boostRating}`,
+        `Boosted Rating: ${state.boostRating}`+
         `time launched: ${state.createdAt}`
     );
+
+    // triggerNewTrade(tokenMint, 0.001, state.vault0, state.vault1); // Buy 0.001 SOL worth of the token
 
     // Cleanup memory
     tokenState.delete(tokenMint);
@@ -122,11 +127,14 @@ async function main() {
     });
 
     /* -------- GRADUATION EVENT -------- */
-    detector.on('graduated', async (tokenMint) => {
+    detector.on('graduated', async (tokenData) => {
+      const tokenMint = tokenData.token0Mint;
       logger.info(`TRIGGER → Token graduated: ${tokenMint}`);
 
-      // Register state FIRST (prevents race condition)
+      // Register state FIRtST (prevents race condition)
       tokenState.set(tokenMint, {
+        vault0: tokenData.token0Vault,
+        vault1: tokenData.token1Vault,
         boosted: false,
         boostRating: 0,
         metadata: null,
