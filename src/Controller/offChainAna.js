@@ -1,9 +1,9 @@
-const { logger } = require('../Utils/logger.js');
 const puppeteer = require("puppeteer");
+const { logger } = require("../Utils/logger.js");
 const { applyFingerprint } = require("../pupbrowser/fingerprint.js");
 
 /* ------------------ helpers ------------------ */
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const normalizeCount = (value = "") => {
   const v = value.toString().replace(/,/g, "").toUpperCase();
@@ -12,41 +12,85 @@ const normalizeCount = (value = "") => {
   return parseInt(v) || 0;
 };
 
-/* ------------------ human-like navigation ------------------ */
+/* ------------------ navigation ------------------ */
 async function gotoHumanLike(page, url) {
-  // Use "networkidle2" to ensure the React app has actually finished fetching data
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+  await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout: 45000
+  });
 
-  try {
-    // Increased timeout slightly to account for slow 512MB RAM processing
-    await page.waitForFunction(
-      () =>
-        document.querySelector('[data-testid="UserDescription"]') ||
-        document.querySelector('[data-testid="tweetText"]') ||
-        document.querySelector('[data-testid="primaryColumn"]'),
-      { timeout: 20000 }
-    );
-  } catch (e) {
-    logger.warn(`Navigation timeout for ${url}: Content might not have loaded fully.`);
-  }
+  await Promise.race([
+    page.waitForSelector('[data-testid="tweetText"]', { timeout: 15000 }),
+    page.waitForSelector('[data-testid="UserDescription"]', { timeout: 15000 }),
+    page.waitForSelector('[data-testid="primaryColumn"]', { timeout: 15000 })
+  ]).catch(() => {
+    logger.warn(`Soft load timeout for ${url}`);
+  });
 
-  await sleep(1500 + Math.random() * 1000);
-  await page.evaluate(() => window.scrollBy(0, 400 + Math.random() * 300));
+  await sleep(800 + Math.random() * 600);
+  await page.evaluate(() => window.scrollBy(0, 250 + Math.random() * 200));
 }
 
-/* ------------------ optimized scraper ------------------ */
+/* ------------------ scraper ------------------ */
 class XScraper {
-  constructor({ recycleAfter = 2 } = {}) {
+  constructor({
+    recyclePageAfter = 1,
+    recycleBrowserAfter = 15,
+    memoryLimitMB = 380,
+    memoryCheckInterval = 5000
+  } = {}) {
     this.browser = null;
     this.page = null;
     this.userDataDir = "./x-session";
     this.queue = [];
     this.active = false;
-    this.scrapeCount = 0;
-    this.recycleAfter = recycleAfter;
+
+    this.pageCount = 0;
+    this.browserCount = 0;
+
+    this.recyclePageAfter = recyclePageAfter;
+    this.recycleBrowserAfter = recycleBrowserAfter;
+
+    this.memoryLimitMB = memoryLimitMB;
+    this.memoryCheckInterval = memoryCheckInterval;
+    this.watchdog = null;
+    this.recycling = false;
   }
 
-  async init() {
+  /* -------- memory watchdog -------- */
+  startMemoryWatchdog() {
+    if (this.watchdog) return;
+
+    this.watchdog = setInterval(async () => {
+      const rssMB = process.memoryUsage().rss / 1024 / 1024;
+
+      if (rssMB >= this.memoryLimitMB && !this.recycling) {
+        this.recycling = true;
+        logger.warn(
+          `MEMORY WATCHDOG → ${rssMB.toFixed(1)} MB used. Recycling browser.`
+        );
+
+        try {
+          await this.closeBrowser();
+          await this.initBrowser();
+        } catch (err) {
+          logger.error("WATCHDOG_RECYCLE_FAILED:", err.message);
+        } finally {
+          this.recycling = false;
+        }
+      }
+    }, this.memoryCheckInterval);
+  }
+
+  stopMemoryWatchdog() {
+    if (this.watchdog) {
+      clearInterval(this.watchdog);
+      this.watchdog = null;
+    }
+  }
+
+  /* -------- init -------- */
+  async initBrowser() {
     if (this.browser) return;
 
     this.browser = await puppeteer.launch({
@@ -59,18 +103,33 @@ class XScraper {
         "--disable-gpu",
         "--no-zygote",
         "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
         "--window-size=1280,1600",
-        "--js-flags='--max-old-space-size=128'"
+        "--js-flags=--max-old-space-size=128"
       ]
     });
 
+    this.browserCount++;
+    logger.info("Browser launched");
+
+    this.startMemoryWatchdog();
+  }
+
+  async initPage() {
+    if (!this.browser) await this.initBrowser();
+
+    if (this.page) {
+      try { await this.page.close(); } catch (_) {}
+    }
+
     this.page = await this.browser.newPage();
 
-    // TUNED INTERCEPTOR: Allow Stylesheets to prevent empty scrapes, block images/media
     await this.page.setRequestInterception(true);
-    this.page.on('request', (req) => {
+    this.page.on("request", (req) => {
       const type = req.resourceType();
-      if (['image', 'media', 'font'].includes(type)) {
+      if (["image", "media", "font"].includes(type)) {
         req.abort();
       } else {
         req.continue();
@@ -78,8 +137,24 @@ class XScraper {
     });
 
     await applyFingerprint(this.page);
+    await this.warmUpSession();
+
+    this.pageCount++;
   }
 
+  /* -------- warmup -------- */
+  async warmUpSession() {
+    await this.page.goto("https://x.com/home", {
+      waitUntil: "domcontentloaded",
+      timeout: 0
+    });
+
+    await sleep(2000);
+    await this.page.evaluate(() => window.scrollBy(0, 400));
+    await sleep(1000);
+  }
+
+  /* -------- queue -------- */
   async enqueue(twitterLink) {
     return new Promise((resolve) => {
       this.queue.push({ twitterLink, resolve });
@@ -89,107 +164,121 @@ class XScraper {
 
   async runQueue() {
     this.active = true;
+
     while (this.queue.length) {
       const { twitterLink, resolve } = this.queue.shift();
+
       try {
-        if (!this.browser || this.scrapeCount >= this.recycleAfter) {
-          logger.info("Recycling browser process to refresh memory...");
-          await this.close();
-          await this.init();
-          this.scrapeCount = 0;
+        if (!this.page || this.pageCount >= this.recyclePageAfter) {
+          await this.initPage();
+          this.pageCount = 0;
         }
 
-        const result = await this.scrape(twitterLink);
-        this.scrapeCount++;
-        resolve(result);
+        if (this.browserCount >= this.recycleBrowserAfter) {
+          logger.warn("Scheduled browser recycle");
+          await this.closeBrowser();
+          await this.initBrowser();
+          this.browserCount = 0;
+        }
+
+        const data = await this.scrape(twitterLink);
+        resolve(data);
       } catch (err) {
-        logger.error("SCRAPER_QUEUE_ERROR:", err.message);
+        logger.error("SCRAPER_QUEUE_ERROR:", err);
         resolve(null);
       }
     }
+
     this.active = false;
   }
 
+  /* -------- scrape -------- */
   async scrape(twitterLink) {
-    if (!this.page) throw new Error("Scraper not initialized.");
+    if (!this.page) throw new Error("Page not initialized");
+
     try {
       await gotoHumanLike(this.page, twitterLink);
 
-      const contextType = twitterLink.includes("/communities/") ? "community" :
-        twitterLink.includes("/status/") ? "post" : "profile";
+      const type =
+        twitterLink.includes("/communities/")
+          ? "community"
+          : twitterLink.includes("/status/")
+          ? "post"
+          : "profile";
 
-      const data = await this.page.evaluate((type) => {
-        const text = (sel) => document.querySelector(sel)?.innerText.trim() || "";
-        const result = { type };
+      const data = await this.page.evaluate((context) => {
+        const text = (sel) =>
+          document.querySelector(sel)?.innerText.trim() || "";
 
-        if (type === "profile") {
-          result.name = text('[data-testid="UserName"]');
-          result.bio = text('[data-testid="UserDescription"]');
-          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+        const res = { type: context };
+
+        if (context === "profile") {
+          res.name = text('[data-testid="UserName"]');
+          res.bio = text('[data-testid="UserDescription"]');
+          res.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
 
           const stat = (label) => {
-            const anchors = Array.from(document.querySelectorAll("a"));
-            const target = anchors.find(a => a.innerText.includes(label));
-            return target ? target.innerText.replace(label, "").trim() : "0";
+            const links = Array.from(document.querySelectorAll("a"));
+            const el = links.find((a) => a.innerText.includes(label));
+            return el ? el.innerText.replace(label, "").trim() : "0";
           };
 
-          result.followingCount = stat("Following");
-          result.followerCount = stat("Followers");
+          res.followingCount = stat("Following");
+          res.followerCount = stat("Followers");
         }
 
-        if (type === 'post') {
-          result.username = text('[data-testid="User-Name"]');
-          result.content = text('[data-testid="tweetText"]');
+        if (context === "post") {
+          res.content = text('[data-testid="tweetText"]');
+          res.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
 
-          // Improved post engagement selector
-          const group = document.querySelector('[role="group"][aria-label*="replies"]');
-          result.engagementRaw = group ? group.getAttribute("aria-label") : "";
-          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+          const g = document.querySelector('[role="group"][aria-label*="replies"]');
+          res.engagementRaw = g?.getAttribute("aria-label") || "";
         }
 
-        if (type === "community") {
-          result.name = text('h2[role="heading"]');
+        if (context === "community") {
+          res.name = text('h2[role="heading"]');
           const spans = Array.from(document.querySelectorAll("span"));
-          const memberSpan = spans.find(s => s.innerText === "Members");
-          result.memberCount = memberSpan ? memberSpan.parentElement.innerText.replace("Members", "").trim() : "0";
+          const m = spans.find((s) => s.innerText === "Members");
+          res.memberCount = m
+            ? m.parentElement.innerText.replace("Members", "").trim()
+            : "0";
         }
 
-        return result;
-      }, contextType);
+        return res;
+      }, type);
 
-      // Post-processing engagement for 'post' type
-      if (data.type === 'post' && data.engagementRaw) {
-        // Example aria-label: "23 replies, 10 reposts, 50 likes"
-        const parts = data.engagementRaw.split(',');
+      if (data.type === "post" && data.engagementRaw) {
+        const p = data.engagementRaw.split(",");
         data.engagement = {
-          comments: normalizeCount(parts[0] || "0"),
-          reposts: normalizeCount(parts[1] || "0"),
-          likes: normalizeCount(parts[2] || "0")
+          comments: normalizeCount(p[0]),
+          reposts: normalizeCount(p[1]),
+          likes: normalizeCount(p[2])
         };
-      } else if (!data.engagement) {
+      } else {
         data.engagement = { comments: 0, reposts: 0, likes: 0 };
       }
 
-      data.followingCount = normalizeCount(data.followingCount || "0");
-      data.followerCount = normalizeCount(data.followerCount || "0");
-      data.memberCount = normalizeCount(data.memberCount || "0");
+      data.followingCount = normalizeCount(data.followingCount);
+      data.followerCount = normalizeCount(data.followerCount);
+      data.memberCount = normalizeCount(data.memberCount);
 
       return data;
     } catch (err) {
-      logger.error(`SCRAPE_FAILED for ${twitterLink}`, err);
+      logger.error(`SCRAPE_FAILED → ${twitterLink}`, err.message);
       return null;
     }
   }
 
-  async close() {
+  /* -------- shutdown -------- */
+  async closeBrowser() {
     try {
-      if (this.page) await this.page.close().catch(() => { });
-      if (this.browser) await this.browser.close().catch(() => { });
-    } catch (e) {
-      // Silently catch closure errors
+      if (this.page) await this.page.close();
+      if (this.browser) await this.browser.close();
+    } catch (_) {
     } finally {
       this.page = null;
       this.browser = null;
+      this.stopMemoryWatchdog();
     }
   }
 }
