@@ -67,11 +67,11 @@ function tryApprove(tokenMint) {
         `Name: ${state.metadata?.name || tokenMint} \n`+
         `link: ${link} \n`+
         `Token address: ${tokenMint} \n`+
-        `Boosted Rating: ${state.boostRating}`+
-        `time launched: ${state.createdAt}`
+        `Boosted Rating: ${state.boostRating} \n`+
+        `time launched: ${new Date(state.createdAt).toLocaleString()}`
     );
 
-    // triggerNewTrade(tokenMint, 0.001, state.vault0, state.vault1); // Buy 0.001 SOL worth of the token
+    // triggerNewTrade(tokenMint, 0.001, state.vault0, state.vault1);
 
     // Cleanup memory
     tokenState.delete(tokenMint);

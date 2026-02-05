@@ -3,6 +3,7 @@ const { executeSell } = require("../Trade/executeSell");
 const { getPrice } = require('../Blockchain/getPrice')
 const { burner } = require("../Trade/closeRent");
 const { logger } = require("../Utils/logger");
+const Trade = require("../Database/models/Trade");
 
 // Configuration
 const POSITIONS = new Map(); // Tracks: { mint: { entryPrice, amount, step: 0 } }
@@ -69,6 +70,7 @@ async function triggerNewTrade(mintAddress, solAmount, Vault0, Vault1) {
             amount: buyResult.outAmount,
             step: 0
         });
+
         monitorPrice(mintAddress, Vault0, Vault1);
     }
 }
