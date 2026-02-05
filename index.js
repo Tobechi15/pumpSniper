@@ -52,7 +52,7 @@ function tryApprove(tokenMint) {
   if (state.marketCap > 420 && state.liquidity > 70) {
     logger.info(`APPROVED → Boost confirmed`, {
       token: tokenMint,
-      name: state.metadata?.name,
+      name: state.metadata?.name
     });
 
     const link = 'https://dexscreener.com/solana/' + tokenMint;
@@ -91,8 +91,8 @@ async function main() {
       tokenState.set(tokenMint, {
         vault0: tokenData.token0Vault,
         vault1: tokenData.token1Vault,
-        liquidity: result.liquidity,
-        marketCap: result.marketCaps,
+        liquidity: result.liquidity[tokenMint],
+        marketCap: result.marketCaps[tokenMint],
         metadata: null,
         createdAt: Date.now()
       });
@@ -106,6 +106,8 @@ async function main() {
       } catch (err) {
         logger.warn(`METADATA ERROR (${tokenMint}): ${err.message}`);
       }
+
+      logger.info(`Analyzed token: ${tokenMint} | Market Cap: ${result.marketCaps[tokenMint]} | Liquidity: ${result.liquidity[tokenMint]}`);
 
       tryApprove(tokenMint)
 
