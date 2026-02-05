@@ -2,9 +2,11 @@ const mongoose = require("mongoose");
 
 const tradeSchema = new mongoose.Schema({
     tokenAddress: { type: String, required: true },
-    pairAddress: { type: String, required: true },
-    tokenReserve: { type: String },
-    baseReserve: { type: String },
+    reserve: {
+        tokenReserve: { type: String },
+        baseReserve: { type: String },
+    },
+    step: { type: Number, default: 0 },
     signature: { type: String },
     tokenName: { type: String, required: true },
     tokenSymbol: { type: String, required: true },

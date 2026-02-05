@@ -4,12 +4,11 @@ const cors = require("cors");
 
 const { config } = require('./src/Utils/config.js');
 const { GetMetaData } = require('./src/Blockchain/metaData.js');
+const PoolAnalyzer = require('./src/Blockchain/poolAnalyzer.js')
 const { logger } = require('./src/Utils/logger.js');
-
 const GraduationDetector = require('./src/Controller/listener.js');
-const DexBoostQueue = require('./src/Controller/checkBoost.js');
 const sendTelegramMessage = require('./src/Database/alert.js');
-const { triggerNewTrade } = require("./src/Controller/monitor.js");
+// const { triggerNewTrade } = require("./src/Controller/monitor.js");
 
 const app = express();
 app.use(cors());
@@ -22,11 +21,8 @@ const detector = new GraduationDetector(
   config.PUBLIC_WS_URL
 );
 
-const boostQueue = new DexBoostQueue({
-  chainId: "solana",
-  intervalMs: 8000,
-  concurrency: 2
-});
+const analyzer = new PoolAnalyzer(config.PUBLIC_RPC_URL);
+
 
 /*
   Token state store:
@@ -48,26 +44,23 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-/* ------------------ FINAL APPROVAL ------------------ */
 
 function tryApprove(tokenMint) {
   const state = tokenState.get(tokenMint);
   if (!state) return;
 
-  if (state.boosted && state.boostRating >= 50) {
+  if (state.marketCap > 420 && state.liquidity > 70) {
     logger.info(`APPROVED → Boost confirmed`, {
       token: tokenMint,
       name: state.metadata?.name,
-      boostRating: state.boostRating
     });
 
     const link = 'https://dexscreener.com/solana/' + tokenMint;
     sendTelegramMessage(
-        `APPROVED: Boost confirmed for: \n`+
+        `APPROVED: \n`+
         `Name: ${state.metadata?.name || tokenMint} \n`+
         `link: ${link} \n`+
         `Token address: ${tokenMint} \n`+
-        `Boosted Rating: ${state.boostRating} \n`+
         `time launched: ${new Date(state.createdAt).toLocaleString()}`
     );
 
@@ -83,66 +76,26 @@ function tryApprove(tokenMint) {
 async function main() {
   try {
     logger.info("Starting Dexscreener boost queue...");
-    boostQueue.start();
 
     logger.info("Starting graduation detector...");
     detector.start();
-
-    /* -------- BOOST EVENT -------- */
-    boostQueue.on("boosted", ({ tokenAddress, boostData }) => {
-      const boostRating = boostData?.active || 0;
-
-      if (boostRating <= 45) {
-        logger.info(`BOOST IGNORED → Rating too low: ${boostRating}`, {
-          token: tokenAddress
-        });
-        return;
-      }
-
-      logger.info(`BOOST DETECTED → ${tokenAddress}`, { boostRating });
-
-      const state = tokenState.get(tokenAddress);
-      if (!state) return;
-
-      state.boosted = true;
-      state.boostRating = boostRating;
-
-      tryApprove(tokenAddress);
-    });
-
-    /* -------- BOOST EXPIRY EVENT -------- */
-    boostQueue.on("expired", ({ tokenAddress, lifetimeMs }) => {
-      logger.info(`BOOST TIMEOUT → Removing token state`, {
-        token: tokenAddress,
-        lifetimeMinutes: Math.floor(lifetimeMs / 60000)
-      });
-
-      if (tokenState.has(tokenAddress)) {
-        tokenState.delete(tokenAddress);
-      }
-    });
-
-    boostQueue.on("error", ({ tokenAddress, message }) => {
-      logger.warn(`DexBoostQueue error → ${tokenAddress}: ${message}`);
-    });
 
     /* -------- GRADUATION EVENT -------- */
     detector.on('graduated', async (tokenData) => {
       const tokenMint = tokenData.token0Mint;
       logger.info(`TRIGGER → Token graduated: ${tokenMint}`);
 
+      const result = await analyzer.analyzePool(tokenMint, tokenData.token1Mint, tokenData.token0Vault, tokenData.token1Vault);
+
       // Register state FIRtST (prevents race condition)
       tokenState.set(tokenMint, {
         vault0: tokenData.token0Vault,
         vault1: tokenData.token1Vault,
-        boosted: false,
-        boostRating: 0,
+        liquidity: result.liquidity,
+        marketCap: result.marketCaps,
         metadata: null,
         createdAt: Date.now()
       });
-
-      // Start boost monitoring
-      boostQueue.addToken(tokenMint);
 
       try {
         const metadata = await GetMetaData(tokenMint);
@@ -153,6 +106,8 @@ async function main() {
       } catch (err) {
         logger.warn(`METADATA ERROR (${tokenMint}): ${err.message}`);
       }
+
+      tryApprove(tokenMint)
 
       logger.info("--------------------------------------------------");
     });

@@ -1,9 +1,7 @@
 {
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
     "@pump-fun/pump-swap-sdk": "^1.13.0",
-    "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "agent-twitter-client": "^0.0.18",
     "axios": "^1.13.2",
