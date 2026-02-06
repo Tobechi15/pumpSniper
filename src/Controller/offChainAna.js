@@ -36,7 +36,7 @@ class XScraper {
   constructor({
     recyclePageAfter = 1,
     recycleBrowserAfter = 15,
-    memoryLimitMB = 380,
+    memoryLimitMB = 150,
     memoryCheckInterval = 5000
   } = {}) {
     this.browser = null;
