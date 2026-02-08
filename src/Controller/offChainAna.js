@@ -14,6 +14,22 @@ const normalizeCount = (value = "") => {
   return parseInt(v) || 0;
 };
 
+/* ------------------ warmup ------------------ */
+async function warmUpXSession(page) {
+  await page.goto("https://x.com/pubity/status/2014435780102418733", {
+    waitUntil: "domcontentloaded",
+    timeout: 0
+  });
+
+  await sleep(3000);
+
+  await page.evaluate(() => {
+    window.scrollBy(0, 500);
+  });
+
+  await sleep(2000);
+}
+
 /* ------------------ human-like navigation ------------------ */
 async function gotoHumanLike(page, url) {
   await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
@@ -45,13 +61,16 @@ class XScraper {
 
     this.totalScrapes = 0;
     this.recycleAfter = recycleAfter;
+
+    this.needsWarmup = false;
   }
 
   /* -------- session cleanup -------- */
   async cleanupSessionDir() {
     try {
       await fs.rm(this.sessionDir, { recursive: true, force: true });
-      logger.warn("x-session directory deleted");
+      this.needsWarmup = true;
+      logger.warn("x-session directory deleted (warmup scheduled)");
     } catch (_) {}
   }
 
@@ -72,7 +91,7 @@ class XScraper {
         const result = await this.scrape(twitterLink);
         resolve(result);
       } catch (err) {
-        logger.error("SCRAPER_QUEUE_ERROR:", err.message);
+        logger.error("SCRAPER_QUEUE_ERROR:", err);
         resolve(null);
       }
     }
@@ -113,6 +132,13 @@ class XScraper {
       });
 
       await applyFingerprint(page);
+
+      if (this.needsWarmup) {
+        logger.info("Running X warmup navigation");
+        await warmUpXSession(page);
+        this.needsWarmup = false;
+      }
+
       await gotoHumanLike(page, twitterLink);
 
       const contextType =
@@ -187,7 +213,7 @@ class XScraper {
       return data;
 
     } catch (err) {
-      logger.error(`SCRAPE_FAILED for ${twitterLink}:`, err.message);
+      logger.error(`SCRAPE_FAILED for ${twitterLink} :`, err);
       return null;
 
     } finally {
