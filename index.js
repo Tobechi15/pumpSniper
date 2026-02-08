@@ -15,7 +15,7 @@ app.use(cors());
 app.use(express.json());
 
 /* ------------------ SERVICES ------------------ */
-const scraper = new XScraper();
+const scraper = new XScraper(); // browser-per-scrape
 const detector = new GraduationDetector(
   config.PUBLIC_RPC_URL,
   config.PUBLIC_WS_URL
@@ -29,32 +29,6 @@ const STATE_TTL = 5 * 60 * 1000; // 5 minutes
 function cleanupToken(tokenMint, reason = "cleanup") {
   tokenState.delete(tokenMint);
   logger.info(`Token ${tokenMint} cleaned up (${reason})`);
-}
-
-/* ------------------ MEMORY WATCHDOG ------------------ */
-const MEMORY_CHECK_INTERVAL = 20_000; // 20s
-const HEAP_LIMIT_MB = 350;            // safe limit under 512MB RAM
-
-function startMemoryWatchdog() {
-  setInterval(async () => {
-    const mem = process.memoryUsage();
-    const heapUsedMB = mem.heapUsed / 1024 / 1024;
-
-    if (heapUsedMB > HEAP_LIMIT_MB) {
-      logger.warn(
-        `MEMORY WATCHDOG → Heap ${heapUsedMB.toFixed(1)}MB (limit ${HEAP_LIMIT_MB}MB)`
-      );
-
-      try {
-        await scraper.closeBrowser();
-        logger.warn("MEMORY WATCHDOG → Scraper browser recycled");
-        await scraper.initBrowser();
-        await scraper.initPage();
-      } catch (err) {
-        logger.error("WATCHDOG CLEANUP FAILED:", err.message);
-      }
-    }
-  }, MEMORY_CHECK_INTERVAL);
 }
 
 /* ------------------ HEALTH ------------------ */
@@ -118,13 +92,6 @@ async function main() {
     logger.info("Starting services...");
 
     detector.start();
-
-    // Initialize scraper properly
-    await scraper.initBrowser();
-    await scraper.initPage();
-
-    // Start memory watchdog
-    startMemoryWatchdog();
 
     detector.on("graduated", async (tokenData) => {
       const tokenMint = tokenData.token0Mint;
@@ -196,7 +163,6 @@ async function main() {
 /* ------------------ SHUTDOWN ------------------ */
 process.on("SIGINT", async () => {
   logger.warn("Graceful shutdown...");
-  await scraper?.closeBrowser();
   process.exit(0);
 });
 
