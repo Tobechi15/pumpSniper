@@ -1,9 +1,11 @@
+const { logger } = require('../Utils/logger.js');
 const puppeteer = require("puppeteer");
-const { logger } = require("../Utils/logger.js");
 const { applyFingerprint } = require("../pupbrowser/fingerprint.js");
+const fs = require("fs/promises");
+const path = require("path");
 
 /* ------------------ helpers ------------------ */
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const normalizeCount = (value = "") => {
   const v = value.toString().replace(/,/g, "").toUpperCase();
@@ -12,149 +14,47 @@ const normalizeCount = (value = "") => {
   return parseInt(v) || 0;
 };
 
-/* ------------------ navigation ------------------ */
+/* ------------------ human-like navigation ------------------ */
 async function gotoHumanLike(page, url) {
-  await page.goto(url, {
-    waitUntil: "domcontentloaded",
-    timeout: 45000
-  });
+  await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
 
-  await Promise.race([
-    page.waitForSelector('[data-testid="tweetText"]', { timeout: 15000 }),
-    page.waitForSelector('[data-testid="UserDescription"]', { timeout: 15000 }),
-    page.waitForSelector('[data-testid="primaryColumn"]', { timeout: 15000 })
-  ]).catch(() => {
-    logger.warn(`Soft load timeout for ${url}`);
-  });
+  try {
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[data-testid="UserDescription"]') ||
+        document.querySelector('[data-testid="tweetText"]') ||
+        document.querySelector('[data-testid="primaryColumn"]'),
+      { timeout: 20000 }
+    );
+  } catch {
+    logger.warn(`Navigation timeout for ${url}`);
+  }
 
-  await sleep(800 + Math.random() * 600);
-  await page.evaluate(() => window.scrollBy(0, 250 + Math.random() * 200));
+  await sleep(1500 + Math.random() * 1000);
+  await page.evaluate(() => window.scrollBy(0, 400 + Math.random() * 300));
 }
 
 /* ------------------ scraper ------------------ */
 class XScraper {
-  constructor({
-    recyclePageAfter = 1,
-    recycleBrowserAfter = 15,
-    memoryLimitMB = 150,
-    memoryCheckInterval = 5000
-  } = {}) {
-    this.browser = null;
-    this.page = null;
-    this.userDataDir = "./x-session";
+  constructor({ recycleAfter = 1 } = {}) {
     this.queue = [];
     this.active = false;
 
-    this.pageCount = 0;
-    this.browserCount = 0;
+    this.userDataDir = "./x-session";
+    this.sessionDir = path.resolve(this.userDataDir);
 
-    this.recyclePageAfter = recyclePageAfter;
-    this.recycleBrowserAfter = recycleBrowserAfter;
-
-    this.memoryLimitMB = memoryLimitMB;
-    this.memoryCheckInterval = memoryCheckInterval;
-    this.watchdog = null;
-    this.recycling = false;
+    this.totalScrapes = 0;
+    this.recycleAfter = recycleAfter;
   }
 
-  /* -------- memory watchdog -------- */
-  startMemoryWatchdog() {
-    if (this.watchdog) return;
-
-    this.watchdog = setInterval(async () => {
-      const rssMB = process.memoryUsage().rss / 1024 / 1024;
-
-      if (rssMB >= this.memoryLimitMB && !this.recycling) {
-        this.recycling = true;
-        logger.warn(
-          `MEMORY WATCHDOG → ${rssMB.toFixed(1)} MB used. Recycling browser.`
-        );
-
-        try {
-          await this.closeBrowser();
-          await this.initBrowser();
-        } catch (err) {
-          logger.error("WATCHDOG_RECYCLE_FAILED:", err.message);
-        } finally {
-          this.recycling = false;
-        }
-      }
-    }, this.memoryCheckInterval);
+  /* -------- session cleanup -------- */
+  async cleanupSessionDir() {
+    try {
+      await fs.rm(this.sessionDir, { recursive: true, force: true });
+      logger.warn("x-session directory deleted");
+    } catch (_) {}
   }
 
-  stopMemoryWatchdog() {
-    if (this.watchdog) {
-      clearInterval(this.watchdog);
-      this.watchdog = null;
-    }
-  }
-
-  /* -------- init -------- */
-  async initBrowser() {
-    if (this.browser) return;
-
-    this.browser = await puppeteer.launch({
-      headless: "new",
-      userDataDir: this.userDataDir,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-zygote",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-background-timer-throttling",
-        "--disable-renderer-backgrounding",
-        "--window-size=1280,1600",
-        "--js-flags=--max-old-space-size=128"
-      ]
-    });
-
-    this.browserCount++;
-    logger.info("Browser launched");
-
-    this.startMemoryWatchdog();
-  }
-
-  async initPage() {
-    if (!this.browser) await this.initBrowser();
-
-    if (this.page) {
-      try { await this.page.close(); } catch (_) {}
-    }
-
-    this.page = await this.browser.newPage();
-
-    await this.page.setRequestInterception(true);
-    this.page.on("request", (req) => {
-      const type = req.resourceType();
-      if (["image", "media", "font"].includes(type)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    await applyFingerprint(this.page);
-    await this.warmUpSession();
-
-    this.pageCount++;
-  }
-
-  /* -------- warmup -------- */
-  async warmUpSession() {
-    await this.page.goto("https://x.com/home", {
-      waitUntil: "domcontentloaded",
-      timeout: 0
-    });
-
-    await sleep(2000);
-    await this.page.evaluate(() => window.scrollBy(0, 400));
-    await sleep(1000);
-  }
-
-  /* -------- queue -------- */
   async enqueue(twitterLink) {
     return new Promise((resolve) => {
       this.queue.push({ twitterLink, resolve });
@@ -169,22 +69,10 @@ class XScraper {
       const { twitterLink, resolve } = this.queue.shift();
 
       try {
-        if (!this.page || this.pageCount >= this.recyclePageAfter) {
-          await this.initPage();
-          this.pageCount = 0;
-        }
-
-        if (this.browserCount >= this.recycleBrowserAfter) {
-          logger.warn("Scheduled browser recycle");
-          await this.closeBrowser();
-          await this.initBrowser();
-          this.browserCount = 0;
-        }
-
-        const data = await this.scrape(twitterLink);
-        resolve(data);
+        const result = await this.scrape(twitterLink);
+        resolve(result);
       } catch (err) {
-        logger.error("SCRAPER_QUEUE_ERROR:", err);
+        logger.error("SCRAPER_QUEUE_ERROR:", err.message);
         resolve(null);
       }
     }
@@ -192,93 +80,119 @@ class XScraper {
     this.active = false;
   }
 
-  /* -------- scrape -------- */
   async scrape(twitterLink) {
-    if (!this.page) throw new Error("Page not initialized");
+    let browser = null;
+    let page = null;
 
     try {
-      await gotoHumanLike(this.page, twitterLink);
+      browser = await puppeteer.launch({
+        headless: "new",
+        userDataDir: this.userDataDir,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--no-zygote",
+          "--disable-extensions",
+          "--window-size=1280,1600",
+          "--js-flags=--max-old-space-size=128"
+        ]
+      });
 
-      const type =
+      page = await browser.newPage();
+
+      await page.setRequestInterception(true);
+      page.on("request", (req) => {
+        const type = req.resourceType();
+        if (["image", "media", "font"].includes(type)) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
+      await applyFingerprint(page);
+      await gotoHumanLike(page, twitterLink);
+
+      const contextType =
         twitterLink.includes("/communities/")
           ? "community"
           : twitterLink.includes("/status/")
           ? "post"
           : "profile";
 
-      const data = await this.page.evaluate((context) => {
+      const data = await page.evaluate((type) => {
         const text = (sel) =>
           document.querySelector(sel)?.innerText.trim() || "";
 
-        const res = { type: context };
+        const result = { type };
 
-        if (context === "profile") {
-          res.name = text('[data-testid="UserName"]');
-          res.bio = text('[data-testid="UserDescription"]');
-          res.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+        if (type === "profile") {
+          result.name = text('[data-testid="UserName"]');
+          result.bio = text('[data-testid="UserDescription"]');
+          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
 
           const stat = (label) => {
-            const links = Array.from(document.querySelectorAll("a"));
-            const el = links.find((a) => a.innerText.includes(label));
-            return el ? el.innerText.replace(label, "").trim() : "0";
+            const anchors = Array.from(document.querySelectorAll("a"));
+            const target = anchors.find(a => a.innerText.includes(label));
+            return target ? target.innerText.replace(label, "").trim() : "0";
           };
 
-          res.followingCount = stat("Following");
-          res.followerCount = stat("Followers");
+          result.followingCount = stat("Following");
+          result.followerCount = stat("Followers");
         }
 
-        if (context === "post") {
-          res.content = text('[data-testid="tweetText"]');
-          res.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+        if (type === 'post') {
+          result.username = text('[data-testid="User-Name"]');
+          result.content = text('[data-testid="tweetText"]');
 
-          const g = document.querySelector('[role="group"][aria-label*="replies"]');
-          res.engagementRaw = g?.getAttribute("aria-label") || "";
+          const group = document.querySelector('[role="group"][aria-label*="replies"]');
+          result.engagementRaw = group ? group.getAttribute("aria-label") : "";
+          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
         }
 
-        if (context === "community") {
-          res.name = text('h2[role="heading"]');
+        if (type === "community") {
+          result.name = text('h2[role="heading"]');
           const spans = Array.from(document.querySelectorAll("span"));
-          const m = spans.find((s) => s.innerText === "Members");
-          res.memberCount = m
-            ? m.parentElement.innerText.replace("Members", "").trim()
+          const memberSpan = spans.find(s => s.innerText === "Members");
+          result.memberCount = memberSpan
+            ? memberSpan.parentElement.innerText.replace("Members", "").trim()
             : "0";
         }
 
-        return res;
-      }, type);
+        return result;
+      }, contextType);
 
-      if (data.type === "post" && data.engagementRaw) {
-        const p = data.engagementRaw.split(",");
+      if (data.type === 'post' && data.engagementRaw) {
+        const parts = data.engagementRaw.split(',');
         data.engagement = {
-          comments: normalizeCount(p[0]),
-          reposts: normalizeCount(p[1]),
-          likes: normalizeCount(p[2])
+          comments: normalizeCount(parts[0] || "0"),
+          reposts: normalizeCount(parts[1] || "0"),
+          likes: normalizeCount(parts[2] || "0")
         };
       } else {
         data.engagement = { comments: 0, reposts: 0, likes: 0 };
       }
 
-      data.followingCount = normalizeCount(data.followingCount);
-      data.followerCount = normalizeCount(data.followerCount);
-      data.memberCount = normalizeCount(data.memberCount);
+      data.followingCount = normalizeCount(data.followingCount || "0");
+      data.followerCount = normalizeCount(data.followerCount || "0");
+      data.memberCount = normalizeCount(data.memberCount || "0");
+
+      this.totalScrapes++;
+      if (this.totalScrapes % this.recycleAfter === 0) {
+        await this.cleanupSessionDir();
+      }
 
       return data;
-    } catch (err) {
-      logger.error(`SCRAPE_FAILED → ${twitterLink}`, err.message);
-      return null;
-    }
-  }
 
-  /* -------- shutdown -------- */
-  async closeBrowser() {
-    try {
-      if (this.page) await this.page.close();
-      if (this.browser) await this.browser.close();
-    } catch (_) {
+    } catch (err) {
+      logger.error(`SCRAPE_FAILED for ${twitterLink}:`, err.message);
+      return null;
+
     } finally {
-      this.page = null;
-      this.browser = null;
-      this.stopMemoryWatchdog();
+      try { if (page) await page.close(); } catch {}
+      try { if (browser) await browser.close(); } catch {}
     }
   }
 }
