@@ -21,20 +21,18 @@ async function warmUpXSession(page) {
     timeout: 0
   });
 
-  // Allow first-load checks + hydration
-  await sleep(3000);
+  await sleep(4000);
 
-  // Human scroll
   await page.evaluate(() => {
     window.scrollBy(0, 500);
   });
 
-  await sleep(2000);
+  await sleep(3000);
 }
 
 /* ------------------ human-like navigation ------------------ */
 async function gotoHumanLike(page, url) {
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+  await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 }); // longer timeout
 
   try {
     await page.waitForFunction(
@@ -42,13 +40,13 @@ async function gotoHumanLike(page, url) {
         document.querySelector('[data-testid="UserDescription"]') ||
         document.querySelector('[data-testid="tweetText"]') ||
         document.querySelector('[data-testid="primaryColumn"]'),
-      { timeout: 20000 }
+      { timeout: 30000 } // longer wait
     );
   } catch {
     logger.warn(`Navigation timeout for ${url}`);
   }
 
-  await sleep(1500 + Math.random() * 1000);
+  await sleep(2000 + Math.random() * 1000);
   await page.evaluate(() => window.scrollBy(0, 400 + Math.random() * 300));
 }
 
@@ -57,19 +55,16 @@ class XScraper {
   constructor({ recycleAfter = 1 } = {}) {
     this.queue = [];
     this.active = false;
-
     this.userDataDir = "./x-session";
     this.sessionDir = path.resolve(this.userDataDir);
-
     this.totalScrapes = 0;
     this.recycleAfter = recycleAfter;
   }
 
-  /* -------- session cleanup -------- */
   async cleanupSessionDir() {
     try {
       await fs.rm(this.sessionDir, { recursive: true, force: true });
-      logger.warn("x-session deleted → warmup scheduled");
+      logger.warn("x-session deleted → ready for fresh warmup");
     } catch (_) {}
   }
 
@@ -120,11 +115,13 @@ class XScraper {
         });
 
         page = await browser.newPage();
-
-        logger.info("X WARMUP → cold session");
         await applyFingerprint(page);
+
+        // Warmup first
+        logger.info("X WARMUP → cold session");
         await warmUpXSession(page);
 
+        // Intercept heavy requests after warmup
         await page.setRequestInterception(true);
         page.on("request", (req) => {
           const type = req.resourceType();
@@ -135,7 +132,7 @@ class XScraper {
           }
         });
 
-        
+        // Navigate to actual target
         await gotoHumanLike(page, twitterLink);
 
         const contextType =
@@ -213,13 +210,10 @@ class XScraper {
     };
 
     try {
-      // First attempt
       return await attemptScrape();
     } catch (err) {
-      logger.warn(`First scrape attempt failed for ${twitterLink}, retrying...`);
-
+      logger.warn(`First scrape failed for ${twitterLink}, retrying...`);
       try {
-        // Retry once
         return await attemptScrape();
       } catch (err2) {
         logger.error(`SCRAPE_FAILED after retry for ${twitterLink}:`, err2);
