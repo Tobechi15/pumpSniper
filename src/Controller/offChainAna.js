@@ -14,42 +14,27 @@ const normalizeCount = (value = "") => {
   return parseInt(v) || 0;
 };
 
-/* ------------------ REAL X WARMUP ------------------ */
+/* ------------------ warmup ------------------ */
 async function warmUpXSession(page) {
-  logger.info("X WARMUP → cold session");
-
-  // IMPORTANT: allow everything during warmup
-  await page.setRequestInterception(false);
-
-  await page.goto("https://x.com/explore", {
+  await page.goto("https://x.com/pubity/status/2014435780102418733", {
     waitUntil: "load",
     timeout: 0
   });
 
-  // Wait for full React hydration
-  await page.waitForSelector('[data-testid="primaryColumn"]', {
-    timeout: 60000
-  });
-
-  // Let background GraphQL + service workers settle
-  await sleep(8000);
-
-  // Human signal
-  await page.evaluate(() => {
-    window.scrollBy(0, 600);
-  });
-
+  // Allow first-load checks + hydration
   await sleep(3000);
 
-  logger.info("X WARMUP → session hydrated");
+  // Human scroll
+  await page.evaluate(() => {
+    window.scrollBy(0, 500);
+  });
+
+  await sleep(2000);
 }
 
 /* ------------------ human-like navigation ------------------ */
 async function gotoHumanLike(page, url) {
-  await page.goto(url, {
-    waitUntil: "networkidle2",
-    timeout: 60000
-  });
+  await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
 
   try {
     await page.waitForFunction(
@@ -57,10 +42,10 @@ async function gotoHumanLike(page, url) {
         document.querySelector('[data-testid="UserDescription"]') ||
         document.querySelector('[data-testid="tweetText"]') ||
         document.querySelector('[data-testid="primaryColumn"]'),
-      { timeout: 25000 }
+      { timeout: 20000 }
     );
   } catch {
-    logger.warn(`Navigation soft-timeout for ${url}`);
+    logger.warn(`Navigation timeout for ${url}`);
   }
 
   await sleep(1500 + Math.random() * 1000);
@@ -78,15 +63,12 @@ class XScraper {
 
     this.totalScrapes = 0;
     this.recycleAfter = recycleAfter;
-
-    this.needsWarmup = false;
   }
 
   /* -------- session cleanup -------- */
   async cleanupSessionDir() {
     try {
       await fs.rm(this.sessionDir, { recursive: true, force: true });
-      this.needsWarmup = true;
       logger.warn("x-session deleted → warmup scheduled");
     } catch (_) {}
   }
@@ -117,126 +99,131 @@ class XScraper {
   }
 
   async scrape(twitterLink) {
-    let browser = null;
-    let page = null;
+    const attemptScrape = async () => {
+      let browser = null;
+      let page = null;
 
-    try {
-      browser = await puppeteer.launch({
-        headless: "new",
-        userDataDir: this.userDataDir,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--no-zygote",
-          "--disable-extensions",
-          "--window-size=1280,1600",
-          "--js-flags=--max-old-space-size=128"
-        ]
-      });
+      try {
+        browser = await puppeteer.launch({
+          headless: "new",
+          userDataDir: this.userDataDir,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--no-zygote",
+            "--disable-extensions",
+            "--window-size=1280,1600",
+            "--js-flags=--max-old-space-size=128"
+          ]
+        });
 
-      page = await browser.newPage();
+        page = await browser.newPage();
 
-      await applyFingerprint(page);
-
-      /* -------- warmup FIRST if session was recycled -------- */
-      if (this.needsWarmup) {
+        logger.info("X WARMUP → cold session");
         await warmUpXSession(page);
-        this.needsWarmup = false;
-      }
 
-      /* -------- NOW enable request blocking -------- */
-      await page.setRequestInterception(true);
-      page.on("request", (req) => {
-        const type = req.resourceType();
-        if (["image", "media", "font"].includes(type)) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
+        await page.setRequestInterception(true);
+        page.on("request", (req) => {
+          const type = req.resourceType();
+          if (["image", "media", "font"].includes(type)) {
+            req.abort();
+          } else {
+            req.continue();
+          }
+        });
 
-      await gotoHumanLike(page, twitterLink);
+        await applyFingerprint(page);
+        await gotoHumanLike(page, twitterLink);
 
-      const contextType =
-        twitterLink.includes("/communities/")
-          ? "community"
-          : twitterLink.includes("/status/")
-          ? "post"
-          : "profile";
+        const contextType =
+          twitterLink.includes("/communities/")
+            ? "community"
+            : twitterLink.includes("/status/")
+            ? "post"
+            : "profile";
 
-      const data = await page.evaluate((type) => {
-        const text = (sel) =>
-          document.querySelector(sel)?.innerText.trim() || "";
+        const data = await page.evaluate((type) => {
+          const text = (sel) => document.querySelector(sel)?.innerText.trim() || "";
+          const result = { type };
 
-        const result = { type };
+          if (type === "profile") {
+            result.name = text('[data-testid="UserName"]');
+            result.bio = text('[data-testid="UserDescription"]');
+            result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
 
-        if (type === "profile") {
-          result.name = text('[data-testid="UserName"]');
-          result.bio = text('[data-testid="UserDescription"]');
-          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+            const stat = (label) => {
+              const anchors = Array.from(document.querySelectorAll("a"));
+              const target = anchors.find(a => a.innerText.includes(label));
+              return target ? target.innerText.replace(label, "").trim() : "0";
+            };
 
-          const stat = (label) => {
-            const anchors = Array.from(document.querySelectorAll("a"));
-            const target = anchors.find(a => a.innerText.includes(label));
-            return target ? target.innerText.replace(label, "").trim() : "0";
+            result.followingCount = stat("Following");
+            result.followerCount = stat("Followers");
+          }
+
+          if (type === 'post') {
+            result.username = text('[data-testid="User-Name"]');
+            result.content = text('[data-testid="tweetText"]');
+
+            const group = document.querySelector('[role="group"][aria-label*="replies"]');
+            result.engagementRaw = group ? group.getAttribute("aria-label") : "";
+            result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
+          }
+
+          if (type === "community") {
+            result.name = text('h2[role="heading"]');
+            const spans = Array.from(document.querySelectorAll("span"));
+            const memberSpan = spans.find(s => s.innerText === "Members");
+            result.memberCount = memberSpan
+              ? memberSpan.parentElement.innerText.replace("Members", "").trim()
+              : "0";
+          }
+
+          return result;
+        }, contextType);
+
+        if (data.type === 'post' && data.engagementRaw) {
+          const parts = data.engagementRaw.split(',');
+          data.engagement = {
+            comments: normalizeCount(parts[0] || "0"),
+            reposts: normalizeCount(parts[1] || "0"),
+            likes: normalizeCount(parts[2] || "0")
           };
-
-          result.followingCount = stat("Following");
-          result.followerCount = stat("Followers");
+        } else {
+          data.engagement = { comments: 0, reposts: 0, likes: 0 };
         }
 
-        if (type === "post") {
-          result.username = text('[data-testid="User-Name"]');
-          result.content = text('[data-testid="tweetText"]');
+        data.followingCount = normalizeCount(data.followingCount || "0");
+        data.followerCount = normalizeCount(data.followerCount || "0");
+        data.memberCount = normalizeCount(data.memberCount || "0");
 
-          const group = document.querySelector('[role="group"][aria-label*="replies"]');
-          result.engagementRaw = group ? group.getAttribute("aria-label") : "";
-          result.isVerified = !!document.querySelector('[data-testid="icon-verified"]');
-        }
+        return data;
 
-        if (type === "community") {
-          result.name = text('h2[role="heading"]');
-          const spans = Array.from(document.querySelectorAll("span"));
-          const memberSpan = spans.find(s => s.innerText === "Members");
-          result.memberCount = memberSpan
-            ? memberSpan.parentElement.innerText.replace("Members", "").trim()
-            : "0";
-        }
+      } catch (err) {
+        throw err;
 
-        return result;
-      }, contextType);
-
-      if (data.type === "post" && data.engagementRaw) {
-        const parts = data.engagementRaw.split(",");
-        data.engagement = {
-          comments: normalizeCount(parts[0] || "0"),
-          reposts: normalizeCount(parts[1] || "0"),
-          likes: normalizeCount(parts[2] || "0")
-        };
-      } else {
-        data.engagement = { comments: 0, reposts: 0, likes: 0 };
-      }
-
-      data.followingCount = normalizeCount(data.followingCount || "0");
-      data.followerCount = normalizeCount(data.followerCount || "0");
-      data.memberCount = normalizeCount(data.memberCount || "0");
-
-      this.totalScrapes++;
-      if (this.totalScrapes % this.recycleAfter === 0) {
+      } finally {
+        try { if (page) await page.close(); } catch {}
+        try { if (browser) await browser.close(); } catch {}
         await this.cleanupSessionDir();
       }
+    };
 
-      return data;
-
+    try {
+      // First attempt
+      return await attemptScrape();
     } catch (err) {
-      logger.error(`SCRAPE_FAILED for ${twitterLink} :`, err.message);
-      return null;
+      logger.warn(`First scrape attempt failed for ${twitterLink}, retrying...`);
 
-    } finally {
-      try { if (page) await page.close(); } catch {}
-      try { if (browser) await browser.close(); } catch {}
+      try {
+        // Retry once
+        return await attemptScrape();
+      } catch (err2) {
+        logger.error(`SCRAPE_FAILED after retry for ${twitterLink}:`, err2.message);
+        return null;
+      }
     }
   }
 }
