@@ -57,6 +57,10 @@ function passesOffChainCriteria(analysis) {
   }
 }
 
+/* ------------------ MINIMUM THRESHOLDS ------------------ */
+const MIN_LIQUIDITY = 580;   // minimum liquidity
+const MIN_MARKETCAP = 19000; // minimum market cap
+
 /* ------------------ APPROVAL ------------------ */
 function tryApprove(tokenMint) {
   const state = tokenState.get(tokenMint);
@@ -64,11 +68,15 @@ function tryApprove(tokenMint) {
 
   const { marketCap, liquidity, analysis, metadata, createdAt } = state;
 
-  if (
-    marketCap > 420 &&
-    liquidity > 70 &&
-    passesOffChainCriteria(analysis)
-  ) {
+  // Reject tokens below thresholds
+  if (marketCap < MIN_MARKETCAP || liquidity < MIN_LIQUIDITY) {
+    logger.warn(`Token ${tokenMint} rejected → below thresholds (MarketCap: ${marketCap}, Liquidity: ${liquidity})`);
+    cleanupToken(tokenMint, "threshold-failed");
+    return;
+  }
+
+  // Run off-chain approval check
+  if (passesOffChainCriteria(analysis)) {
     state.approved = true;
 
     logger.info(`APPROVED → ${tokenMint}`);
@@ -112,6 +120,13 @@ async function main() {
 
       const marketCap = analysisResult?.marketCaps?.[tokenMint] ?? 0;
       const liquidity = analysisResult?.liquidity?.[tokenMint] ?? 0;
+
+      // Early rejection if thresholds not met (skip scraping entirely)
+      if (marketCap < MIN_MARKETCAP || liquidity < MIN_LIQUIDITY) {
+        logger.warn(`Token ${tokenMint} rejected early → below thresholds (MarketCap: ${marketCap}, Liquidity: ${liquidity})`);
+        cleanupToken(tokenMint, "threshold-failed");
+        return;
+      }
 
       tokenState.set(tokenMint, {
         vault0: tokenData.token0Vault,

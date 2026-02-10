@@ -1,9 +1,6 @@
 {
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "@pump-fun/pump-swap-sdk": "^1.13.0",
     "@solana/web3.js": "^1.98.4",
-    "agent-twitter-client": "^0.0.18",
     "axios": "^1.13.2",
     "bs58": "^6.0.0",
     "cors": "^2.8.5",
