@@ -122,6 +122,7 @@ class XScraper {
         page = await browser.newPage();
 
         logger.info("X WARMUP → cold session");
+        await applyFingerprint(page);
         await warmUpXSession(page);
 
         await page.setRequestInterception(true);
@@ -134,7 +135,7 @@ class XScraper {
           }
         });
 
-        await applyFingerprint(page);
+        
         await gotoHumanLike(page, twitterLink);
 
         const contextType =
@@ -221,7 +222,7 @@ class XScraper {
         // Retry once
         return await attemptScrape();
       } catch (err2) {
-        logger.error(`SCRAPE_FAILED after retry for ${twitterLink}:`, err2.message);
+        logger.error(`SCRAPE_FAILED after retry for ${twitterLink}:`, err2);
         return null;
       }
     }
