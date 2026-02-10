@@ -3,5 +3,6 @@
 /.cache
 /logs
 /x-session
+/test
 test.js
 test2.js
