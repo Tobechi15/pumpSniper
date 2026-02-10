@@ -30,7 +30,7 @@ async function warmUpXSession(page) {
 /* ------------------ human-like navigation ------------------ */
 async function gotoHumanLike(page, url) {
   try {
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 120000 });
 
     await page.waitForFunction(
       () =>
