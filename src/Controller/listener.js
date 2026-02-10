@@ -194,7 +194,6 @@ class GraduationDetector extends EventEmitter {
                     
                     if (token0Mint && !this.seenTokens.has(token0Mint)) {
                         this.seenTokens.set(token0Mint);
-                        logger.info(`GRADUATION CONFIRMED → ${token0Mint}`);
                         this.emit('graduated', tokenData);
                     }
 

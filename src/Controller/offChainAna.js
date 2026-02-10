@@ -14,25 +14,42 @@ const normalizeCount = (value = "") => {
   return parseInt(v) || 0;
 };
 
-/* ------------------ warmup ------------------ */
+/* ------------------ REAL X WARMUP ------------------ */
 async function warmUpXSession(page) {
-  await page.goto("https://x.com/pubity/status/2014435780102418733", {
-    waitUntil: "domcontentloaded",
+  logger.info("X WARMUP → cold session");
+
+  // IMPORTANT: allow everything during warmup
+  await page.setRequestInterception(false);
+
+  await page.goto("https://x.com/explore", {
+    waitUntil: "load",
     timeout: 0
+  });
+
+  // Wait for full React hydration
+  await page.waitForSelector('[data-testid="primaryColumn"]', {
+    timeout: 60000
+  });
+
+  // Let background GraphQL + service workers settle
+  await sleep(8000);
+
+  // Human signal
+  await page.evaluate(() => {
+    window.scrollBy(0, 600);
   });
 
   await sleep(3000);
 
-  await page.evaluate(() => {
-    window.scrollBy(0, 500);
-  });
-
-  await sleep(2000);
+  logger.info("X WARMUP → session hydrated");
 }
 
 /* ------------------ human-like navigation ------------------ */
 async function gotoHumanLike(page, url) {
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+  await page.goto(url, {
+    waitUntil: "networkidle2",
+    timeout: 60000
+  });
 
   try {
     await page.waitForFunction(
@@ -40,10 +57,10 @@ async function gotoHumanLike(page, url) {
         document.querySelector('[data-testid="UserDescription"]') ||
         document.querySelector('[data-testid="tweetText"]') ||
         document.querySelector('[data-testid="primaryColumn"]'),
-      { timeout: 20000 }
+      { timeout: 25000 }
     );
   } catch {
-    logger.warn(`Navigation timeout for ${url}`);
+    logger.warn(`Navigation soft-timeout for ${url}`);
   }
 
   await sleep(1500 + Math.random() * 1000);
@@ -70,7 +87,7 @@ class XScraper {
     try {
       await fs.rm(this.sessionDir, { recursive: true, force: true });
       this.needsWarmup = true;
-      logger.warn("x-session directory deleted (warmup scheduled)");
+      logger.warn("x-session deleted → warmup scheduled");
     } catch (_) {}
   }
 
@@ -121,6 +138,15 @@ class XScraper {
 
       page = await browser.newPage();
 
+      await applyFingerprint(page);
+
+      /* -------- warmup FIRST if session was recycled -------- */
+      if (this.needsWarmup) {
+        await warmUpXSession(page);
+        this.needsWarmup = false;
+      }
+
+      /* -------- NOW enable request blocking -------- */
       await page.setRequestInterception(true);
       page.on("request", (req) => {
         const type = req.resourceType();
@@ -130,14 +156,6 @@ class XScraper {
           req.continue();
         }
       });
-
-      await applyFingerprint(page);
-
-      if (this.needsWarmup) {
-        logger.info("Running X warmup navigation");
-        await warmUpXSession(page);
-        this.needsWarmup = false;
-      }
 
       await gotoHumanLike(page, twitterLink);
 
@@ -169,7 +187,7 @@ class XScraper {
           result.followerCount = stat("Followers");
         }
 
-        if (type === 'post') {
+        if (type === "post") {
           result.username = text('[data-testid="User-Name"]');
           result.content = text('[data-testid="tweetText"]');
 
@@ -190,8 +208,8 @@ class XScraper {
         return result;
       }, contextType);
 
-      if (data.type === 'post' && data.engagementRaw) {
-        const parts = data.engagementRaw.split(',');
+      if (data.type === "post" && data.engagementRaw) {
+        const parts = data.engagementRaw.split(",");
         data.engagement = {
           comments: normalizeCount(parts[0] || "0"),
           reposts: normalizeCount(parts[1] || "0"),
@@ -213,7 +231,7 @@ class XScraper {
       return data;
 
     } catch (err) {
-      logger.error(`SCRAPE_FAILED for ${twitterLink} :`, err);
+      logger.error(`SCRAPE_FAILED for ${twitterLink} :`, err.message);
       return null;
 
     } finally {
