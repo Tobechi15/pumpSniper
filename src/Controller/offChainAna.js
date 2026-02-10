@@ -1,6 +1,6 @@
-const { logger } = require('../src/Utils/logger.js');
+const { logger } = require('../Utils/logger.js');
 const puppeteer = require("puppeteer");
-const { applyFingerprint } = require("../src/pupbrowser/fingerprint.js");
+const { applyFingerprint } = require("../pupbrowser/fingerprint.js");
 
 /* ------------------ helpers ------------------ */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
