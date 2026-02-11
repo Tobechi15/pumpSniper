@@ -40,6 +40,8 @@ app.get("/api/health", (_, res) => {
 function passesOffChainCriteria(analysis) {
   if (!analysis) return false;
 
+  logger.info(`Off-chain analysis for ${JSON.stringify(analysis)}`);
+
   switch (analysis.type) {
     case "community":
       return analysis.memberCount > 400;
@@ -58,8 +60,8 @@ function passesOffChainCriteria(analysis) {
 }
 
 /* ------------------ MINIMUM THRESHOLDS ------------------ */
-const MIN_LIQUIDITY = 580;   // minimum liquidity
-const MIN_MARKETCAP = 19000; // minimum market cap
+const MIN_LIQUIDITY = config.MIN_LIQUIDITY;   // minimum liquidity
+const MIN_MARKETCAP = config.MIN_MARKET_CAP; // minimum market cap
 
 /* ------------------ APPROVAL ------------------ */
 function tryApprove(tokenMint) {

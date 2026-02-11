@@ -12,12 +12,10 @@ const config = {
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID.split(","),
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   JUPITER_API_KEY: process.env.JUPITER_API_KEY,
-
-
-
+  MIN_LIQUIDITY: process.env.MIN_LIQUIDITY ? parseFloat(process.env.MIN_LIQUIDITY) : 480,
+  MIN_MARKET_CAP: process.env.MIN_MARKET_CAP ? parseFloat(process.env.MIN_MARKET_CAP) : 18000,
   PRIVATE_RPC_URL: process.env.PRIVATE_RPC_URL,
   PORT: process.env.PORT || 5000,
-
   WALLET_ADDRESS: process.env.WALLET_ADDRESS,
   PRICE_CHANGE_THRESHOLD: process.env.PRICE_CHANGE_THRESHOLD ? parseFloat(process.env.PRICE_CHANGE_THRESHOLD) : 100, // Default to 100%
   PRICE_CHANGE_STOP: process.env.PRICE_CHANGE_STOP ? parseFloat(process.env.PRICE_CHANGE_STOP) : -50,
