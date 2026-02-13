@@ -3,7 +3,7 @@ require("dotenv").config();
 const config = {
   HELIUS_API_KEY: process.env.HELIUS_API_KEY,
   MONGO_URI: process.env.MONGO_URI,
-
+  BROWSER_WSE_ENDPOINT: process.env.BROWSER_WSE_ENDPOINT,
   PUBLIC_WS_URL: process.env.PUBLIC_WS_URL,
   PUBLIC_RPC_URL: process.env.PUBLIC_RPC_URL,
   X_ACCOUNTS_JSON: process.env.ACCOUNTS_JSON,
