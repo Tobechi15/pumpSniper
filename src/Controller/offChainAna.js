@@ -112,7 +112,7 @@ class XScraper {
       const result = await this.scrape(job.url);
       job.resolve(result);
     } catch (err) {
-      logger.error("SCRAPER_QUEUE_ERROR:", err.message);
+      logger.error("SCRAPER_QUEUE_ERROR:", err);
       job.resolve(null);
     } finally {
       this.active = false;
@@ -188,7 +188,7 @@ class XScraper {
       data.memberCount = normalizeCount(data.memberCount || "0");
 
     } catch (err) {
-      logger.error("SCRAPER_EVAL_ERROR:", err.message);
+      logger.error("SCRAPER_EVAL_ERROR:", err);
       return null;
     }
 
