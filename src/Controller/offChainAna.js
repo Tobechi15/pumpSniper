@@ -12,20 +12,6 @@ const normalizeCount = (value = "") => {
   return parseInt(v) || 0;
 };
 
-/* ------------------ warmup ------------------ */
-async function warmUpXSession(page) {
-  try {
-    await page.goto("https://www.w3schools.com/", {
-      waitUntil: "domcontentloaded",
-      timeout: 30000
-    });
-    await sleep(1500);
-    await page.evaluate(() => window.scrollBy(0, 200));
-    await sleep(1500);
-  } catch (err) {
-    logger.warn("Warmup failed, continuing anyway");
-  }
-}
 
 /* ------------------ human-like navigation ------------------ */
 async function gotoHumanLike(page, url) {
@@ -69,10 +55,6 @@ class XScraper {
       // create a single page for all jobs
       this.page = await this.browser.newPage();
       await applyFingerprint(this.page);
-
-      // Warmup
-      logger.info("X WARMUP → cold session");
-      await warmUpXSession(this.page);
 
       // Block heavy resources
       await this.page.setRequestInterception(true);
