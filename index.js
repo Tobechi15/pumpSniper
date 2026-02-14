@@ -77,6 +77,8 @@ function tryApprove(tokenMint) {
     return;
   }
 
+  logger.info(`Token ${tokenMint} meets thresholds → MarketCap: ${marketCap}, Liquidity: ${liquidity}. Proceeding with off-chain analysis.`);
+
   // Run off-chain approval check
   if (passesOffChainCriteria(analysis)) {
     state.approved = true;
